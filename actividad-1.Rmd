@@ -1,0 +1,905 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+datos <- read.csv("C:\\Users\\003627661\\workspace\\U\\Metodos\\act-1\\data\\global_student_digital_behavior_dataset.csv")
+```
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ggthemes)
+```
+
+```{r}
+
+calc_moda_cont <- function(x) {
+  d <- density(na.omit(x))
+  d$x[which.max(d$y)]
+}
+
+media   <- mean(datos$social_media_hours, na.rm = TRUE)
+mediana <- median(datos$social_media_hours, na.rm = TRUE)
+moda    <- calc_moda_cont(datos$social_media_hours)
+
+# Labels con valores embebidos para la leyenda
+label_media   <- paste0("Media (", round(media, 1), ")")
+label_mediana <- paste0("Mediana (", round(mediana, 1), ")")
+label_moda    <- paste0("Moda (", round(moda, 1), ")")
+
+lineas <- data.frame(
+  valor   = c(media, mediana, moda),
+  metrica = factor(
+    c(label_media, label_mediana, label_moda),
+    levels = c(label_media, label_mediana, label_moda)
+  )
+)
+
+colores   <- setNames(c("#E63946", "#2DC653", "#FF8C00"),
+                      c(label_media, label_mediana, label_moda))
+linetypes <- setNames(c("solid", "dashed", "longdash"),
+                      c(label_media, label_mediana, label_moda))
+
+ggplot(datos, aes(x = social_media_hours)) +
+  geom_histogram(
+    aes(y = after_stat(density)),
+    binwidth  = 1,
+    fill      = "#B0C4DE",
+    color     = "white",
+    linewidth = 0.3
+  ) +
+  geom_density(color = "black", linewidth = 0.8, bw = 1.5) +
+  geom_vline(
+    data      = lineas,
+    aes(xintercept = valor, color = metrica, linetype = metrica),
+    linewidth = 0.9
+  ) +
+  scale_color_manual(values = colores) +
+  scale_linetype_manual(values = linetypes) +
+  labs(
+    title    = "Distribución de Horas en Redes Sociales",
+    x        = "Horas diarias en redes sociales",
+    y        = "Densidad",
+    color    = NULL,
+    linetype = NULL
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5, size = 13),
+    legend.position  = "top",
+    legend.key.width = unit(1.5, "cm")
+  )
+```
+
+```{r}
+library(tidyverse)
+library(robustbase)
+
+x   <- datos$social_media_hours
+q1  <- quantile(x, 0.25, names = FALSE)
+q3  <- quantile(x, 0.75, names = FALSE)
+ric <- q3 - q1
+mc  <- mc(x)
+
+if (mc >= 0) {
+  cerca_inf <- q1 - 1.5 * exp(-4 * mc) * ric
+  cerca_sup <- q3 + 1.5 * exp( 3 * mc) * ric
+} else {
+  cerca_inf <- q1 - 1.5 * exp(-3 * mc) * ric
+  cerca_sup <- q3 + 1.5 * exp( 4 * mc) * ric
+}
+
+atipicos_df   <- tibble(Horas = x[x < cerca_inf | x > cerca_sup])
+bigote_inf    <- min(x[x >= cerca_inf])
+bigote_sup    <- max(x[x <= cerca_sup])
+n_atipicos    <- nrow(atipicos_df)
+
+estad_box <- tibble(
+  grupo  = "Horas en Redes Sociales",
+  ymin   = bigote_inf,
+  lower  = q1,
+  middle = median(x),
+  upper  = q3,
+  ymax   = bigote_sup
+)
+
+ggplot() +
+  geom_boxplot(
+    data = estad_box,
+    aes(x = grupo, ymin = ymin, lower = lower, middle = middle,
+        upper = upper, ymax = ymax),
+    stat = "identity", width = 0.35,
+    fill = "#4E79A7", color = "#1a2a3a",
+    alpha = 0.72, linewidth = 0.65, fatten = 1.8
+  ) +
+  geom_hline(yintercept = cerca_sup, linetype = "dashed",
+             color = "#E74C3C", linewidth = 0.45, alpha = 0.7) +
+  geom_hline(yintercept = cerca_inf, linetype = "dashed",
+             color = "#E74C3C", linewidth = 0.45, alpha = 0.7) +
+  { if (n_atipicos > 0)
+      geom_jitter(data = atipicos_df, aes(x = "Horas en Redes Sociales", y = Horas),
+                  shape = 21, fill = "#E74C3C", color = "#7B0D0D",
+                  size = 2.8, stroke = 0.7, width = 0.04, alpha = 0.9)
+  } +
+  # Anotaciones de cuartiles
+  annotate("text", x = 0.75, y = q1,
+           label = paste0("Q1: ", round(q1, 2)),
+           size = 3.1, hjust = 0, color = "#2980B9", fontface = "bold") +
+  annotate("text", x = 1.25, y = median(x),
+           label = paste0("Mediana: ", round(median(x), 2)),
+           size = 3.1, hjust = 0, color = "#27AE60", fontface = "bold") +
+  annotate("text", x = 0.75, y = q3,
+           label = paste0("Q3: ", round(q3, 2)),
+           size = 3.1, hjust = 0, color = "#8E44AD", fontface = "bold") +
+  annotate("text", x = 1.28, y = cerca_sup,
+           label = paste0("Cerca sup.: ", round(cerca_sup, 2)),
+           size = 3.1, hjust = 0, color = "#C0392B", fontface = "italic") +
+  annotate("text", x = 1.28, y = cerca_inf,
+           label = paste0("Cerca inf.: ", round(cerca_inf, 2)),
+           size = 3.1, hjust = 0, color = "#C0392B", fontface = "italic") +
+  scale_x_discrete(expand = expansion(mult = c(0.5, 0.9))) +
+  labs(
+    title    = "Distribución de Horas en Redes Sociales — Boxplot Ajustado por Asimetría",
+    subtitle = "Método: Hubert & Vandervieren (2008) · Sesgo estimado vía Medcouple (MC)",
+    x        = NULL,
+    y        = "Horas diarias en redes sociales",
+    caption  = paste0(
+      "n = ", length(x),
+      "  ·  Medcouple (MC) = ", round(mc, 4),
+      "  ·  Atípicos detectados: ", n_atipicos,
+      "  ·  Cercas: [", round(cerca_inf, 2), ", ", round(cerca_sup, 2), "]"
+    )
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title         = element_text(face = "bold", size = 14.5, color = "#1a2a3a"),
+    plot.subtitle      = element_text(size = 10.5, color = "#5D6D7E", margin = margin(b = 8)),
+    plot.caption       = element_text(size = 8.5, color = "#95A5A6", hjust = 0),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.y = element_line(color = "#ECF0F1", linewidth = 0.4),
+    axis.text          = element_text(color = "#2C3E50"),
+    plot.margin        = margin(16, 24, 12, 16)
+  )
+```
+
+```{r}
+library(tidyverse)
+
+x        <- datos$social_media_hours
+media    <- mean(x)
+de       <- sd(x)
+varianza <- var(x)
+minimo   <- min(x)
+maximo   <- max(x)
+rango    <- maximo - minimo
+
+dens    <- density(x, adjust = 6)
+dens_df <- tibble(val = dens$x, den = dens$y)
+
+sd_df    <- dens_df |> filter(val >= (media - de), val <= (media + de))
+rango_df <- dens_df |> filter(val >= minimo, val <= maximo)
+
+dens_min <- ifelse(is.na(approx(dens$x, dens$y, xout = minimo)$y), 0,
+                   approx(dens$x, dens$y, xout = minimo)$y)
+dens_max <- ifelse(is.na(approx(dens$x, dens$y, xout = maximo)$y), 0,
+                   approx(dens$x, dens$y, xout = maximo)$y)
+
+y_max <- max(dens_df$den)
+x_rng <- diff(range(dens_df$val))
+x_end <- max(dens_df$val)
+
+# ── Geometría de las cajas de leyenda ────────────────────────────────────────
+bx0 <- x_end + x_rng * 0.06
+bx1 <- x_end + x_rng * 0.52
+bcx <- (bx0 + bx1) / 2
+bix <- bx0 + (bx1 - bx0) * 0.12
+btx <- bx0 + (bx1 - bx0) * 0.24
+
+ggplot(dens_df, aes(x = val, y = den)) +
+  # ── Área rango completo
+  geom_area(data = rango_df, aes(x = val, y = den),
+            fill = "#D6EAF8", alpha = 0.55, inherit.aes = FALSE) +
+  # ── Área ±1 DE
+  geom_area(data = sd_df, aes(x = val, y = den),
+            fill = "#5DADE2", alpha = 0.65, inherit.aes = FALSE) +
+  # ── Curva de densidad
+  geom_line(color = "#1a2a3a", linewidth = 1.1) +
+  # ── Línea vertical: media
+  geom_vline(xintercept = media, linetype = "dashed",
+             color = "#E74C3C", linewidth = 0.75) +
+  # ── Diamantes en mínimo y máximo
+  geom_point(
+    data = tibble(v = c(minimo, maximo), d = c(dens_min, dens_max)),
+    aes(x = v, y = d),
+    shape = 18, size = 4.5, color = "#1a2a3a", inherit.aes = FALSE
+  ) +
+  # ══ CAJA 1: Métricas de Control ══════════════════════════════════════════════
+  annotate("rect", xmin = bx0, xmax = bx1,
+           ymin = y_max * 0.695, ymax = y_max * 1.02,
+           fill = "white", color = "#BDC3C7", linewidth = 0.45) +
+  annotate("text", x = bcx, y = y_max * 0.965,
+           label = "Métricas de Control",
+           fontface = "bold", size = 3.0, color = "#1a2a3a", hjust = 0.5) +
+  annotate("point", x = bix, y = y_max * 0.875,
+           shape = 18, size = 3.0, color = "#1a2a3a") +
+  annotate("text", x = btx, y = y_max * 0.875,
+           label = "Límites de la muestra",
+           size = 2.8, color = "#1a2a3a", hjust = 0) +
+  annotate("segment",
+           x    = bix - (bx1 - bx0) * 0.05,
+           xend = bix + (bx1 - bx0) * 0.05,
+           y    = y_max * 0.782, yend = y_max * 0.782,
+           linetype = "dashed", color = "#E74C3C", linewidth = 0.65) +
+  annotate("text", x = btx, y = y_max * 0.782,
+           label = paste0("Media: ", round(media, 2)),
+           size = 2.8, color = "#E74C3C", hjust = 0) +
+  # ══ CAJA 2: Áreas de Dispersión ══════════════════════════════════════════════
+  annotate("rect", xmin = bx0, xmax = bx1,
+           ymin = y_max * 0.36, ymax = y_max * 0.68,
+           fill = "white", color = "#BDC3C7", linewidth = 0.45) +
+  annotate("text", x = bcx, y = y_max * 0.638,
+           label = "Áreas de Dispersión",
+           fontface = "bold", size = 3.0, color = "#1a2a3a", hjust = 0.5) +
+  annotate("rect",
+           xmin = bix - (bx1 - bx0) * 0.06,
+           xmax = bix + (bx1 - bx0) * 0.06,
+           ymin = y_max * 0.545, ymax = y_max * 0.595,
+           fill = "#5DADE2", color = NA, alpha = 0.8) +
+  annotate("text", x = btx, y = y_max * 0.570,
+           label = paste0("\u00b11 DE: [", round(media - de, 2),
+                          " \u2013 ", round(media + de, 2), "]"),
+           size = 2.8, color = "#1a2a3a", hjust = 0) +
+  annotate("rect",
+           xmin = bix - (bx1 - bx0) * 0.06,
+           xmax = bix + (bx1 - bx0) * 0.06,
+           ymin = y_max * 0.448, ymax = y_max * 0.498,
+           fill = "#D6EAF8", color = NA, alpha = 0.8) +
+  annotate("text", x = btx, y = y_max * 0.473,
+           label = paste0("Rango: [", minimo, " \u2013 ", maximo, "]"),
+           size = 2.8, color = "#1a2a3a", hjust = 0) +
+  # ══ CAJA 3: Estadísticos aislados — Varianza, Mínimo, Máximo ═════════════════
+  annotate("rect", xmin = bx0, xmax = bx1,
+           ymin = y_max * 0.02, ymax = y_max * 0.34,
+           fill = "white", color = "#BDC3C7", linewidth = 0.45) +
+  annotate("text", x = bcx, y = y_max * 0.298,
+           label = "Estadísticos",
+           fontface = "bold", size = 3.0, color = "#1a2a3a", hjust = 0.5) +
+  annotate("text", x = bx0 + (bx1 - bx0) * 0.08, y = y_max * 0.230,
+           label = paste0("Varianza:  ", round(varianza, 3)),
+           size = 2.8, color = "#8E44AD", hjust = 0) +
+  annotate("text", x = bx0 + (bx1 - bx0) * 0.08, y = y_max * 0.160,
+           label = paste0("M\u00ednimo:   ", minimo),
+           size = 2.8, color = "#27AE60", hjust = 0) +
+  annotate("text", x = bx0 + (bx1 - bx0) * 0.08, y = y_max * 0.090,
+           label = paste0("M\u00e1ximo:   ", maximo),
+           size = 2.8, color = "#2980B9", hjust = 0) +
+  # ── Escalas ───────────────────────────────────────────────────────────────────
+  coord_cartesian(clip = "off") +
+  scale_x_continuous(expand = expansion(add = c(0, x_rng * 0.58))) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  # ── Etiquetas ─────────────────────────────────────────────────────────────────
+  labs(
+    title    = "Distribución de Horas en Redes Sociales \u2014 An\u00e1lisis de Dispersi\u00f3n",
+    subtitle = "Densidad kernel con \u00e1reas de dispersi\u00f3n y m\u00e9tricas estad\u00edsticas",
+    x        = "Horas diarias en redes sociales",
+    y        = "Densidad",
+    caption  = paste0(
+      "n = ", length(x),
+      "  \u00b7  Media: ", round(media, 2),
+      "  \u00b7  DE: ", round(de, 2),
+      "  \u00b7  Varianza: ", round(varianza, 2),
+      "  \u00b7  Rango: ", rango, " [", minimo, " \u2013 ", maximo, "]"
+    )
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title         = element_text(face = "bold", size = 14.5, color = "#1a2a3a"),
+    plot.subtitle      = element_text(size = 10.5, color = "#5D6D7E", margin = margin(b = 8)),
+    plot.caption       = element_text(size = 8.5, color = "#95A5A6", hjust = 0),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major   = element_line(color = "#ECF0F1", linewidth = 0.4),
+    axis.text          = element_text(color = "#2C3E50"),
+    legend.position    = "none",
+    plot.margin        = margin(16, 8, 12, 16)
+  )
+```
+
+```{r}
+library(ggplot2)
+
+# 1. Función para la moda (estimación vía densidad kernel para variable continua)
+calc_moda_cont <- function(x) {
+  d <- density(na.omit(x))
+  d$x[which.max(d$y)]
+}
+
+# 2. Cálculos estadísticos para academic_motivation
+media   <- mean(datos$academic_motivation, na.rm = TRUE)
+mediana <- median(datos$academic_motivation, na.rm = TRUE)
+moda    <- calc_moda_cont(datos$academic_motivation)
+
+# 3. Labels con valores embebidos
+label_media   <- paste0("Media (", round(media, 1), ")")
+label_mediana <- paste0("Mediana (", round(mediana, 1), ")")
+label_moda    <- paste0("Moda (", round(moda, 1), ")")
+
+# 4. Preparación de datos para líneas y leyendas
+lineas <- data.frame(
+  valor   = c(media, mediana, moda),
+  metrica = factor(
+    c(label_media, label_mediana, label_moda),
+    levels = c(label_media, label_mediana, label_moda)
+  )
+)
+
+# Paleta de colores: Rojo para media, Verde para mediana, Naranja para moda
+colores   <- setNames(c("#D62828", "#1B4332", "#F77F00"), 
+                      c(label_media, label_mediana, label_moda))
+linetypes <- setNames(c("solid", "dashed", "longdash"), 
+                      c(label_media, label_mediana, label_moda))
+
+# 5. Generación del Gráfico
+ggplot(datos, aes(x = academic_motivation)) +
+  # Histograma con densidad
+  geom_histogram(
+    aes(y = after_stat(density)),
+    binwidth  = 1,
+    fill      = "#A9D6E5",
+    color     = "white",
+    linewidth = 0.3
+  ) +
+  # Curva de densidad suavizada
+  geom_density(color = "#012A4A", linewidth = 1) +
+  # Líneas de tendencia central
+  geom_vline(
+    data      = lineas,
+    aes(xintercept = valor, color = metrica, linetype = metrica),
+    linewidth = 1
+  ) +
+  scale_color_manual(values = colores) +
+  scale_linetype_manual(values = linetypes) +
+  scale_x_continuous(breaks = seq(1, 10, 1)) +
+  labs(
+    title    = "Distribución de la Motivación Académica",
+    subtitle = "Análisis de Tendencia Central (Academic Motivation)",
+    x        = "Motivación Académica (1 = Mínima, 10 = Máxima)",
+    y        = "Densidad",
+    color    = NULL,
+    linetype = NULL
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5, size = 14),
+    plot.subtitle    = element_text(hjust = 0.5, size = 11, color = "gray30"),
+    legend.position  = "top",
+    legend.key.width = unit(1.2, "cm"),
+    legend.text      = element_text(size = 10)
+  )
+```
+
+```{r}
+# --- SCRIPT DE ANÁLISIS ROBUSTO: PRODUCTIVITY LOSS SCORE ---
+# Proyecto: Análisis de Motivación Académica (MSc IA)
+# Método: Hubert & Vandervieren (2008) para detección de atípicos
+
+library(tidyverse)
+library(robustbase)
+
+# 1. Definición de la variable y limpieza inicial
+# Asegúrate de que 'datos' sea tu dataframe cargado
+x <- datos$academic_motivation
+mc_val <- mc(x, na.rm = TRUE)
+
+# 2. Cálculo de Cuartiles y Rango Intercuartílico (RIC)
+q1  <- quantile(x, 0.25, names = FALSE, na.rm = TRUE)
+q3  <- quantile(x, 0.75, names = FALSE, na.rm = TRUE)
+med <- median(x, na.rm = TRUE)
+ric <- q3 - q1
+
+# 3. Aplicación de las fórmulas de Hubert & Vandervieren (Cercas Ajustadas)
+# El Medcouple (MC) ajusta los límites según la asimetría de la muestra
+if (mc_val >= 0) {
+  cerca_inf <- q1 - 1.5 * exp(-4 * mc_val) * ric
+  cerca_sup <- q3 + 1.5 * exp( 3 * mc_val) * ric
+} else {
+  cerca_inf <- q1 - 1.5 * exp(-3 * mc_val) * ric
+  cerca_sup <- q3 + 1.5 * exp( 4 * mc_val) * ric
+}
+
+# 4. Identificación de Atípicos y Bigotes (Whiskers)
+atipicos_df <- tibble(Motivacion = x[x < cerca_inf | x > cerca_sup])
+bigote_inf  <- min(x[x >= cerca_inf], na.rm = TRUE)
+bigote_sup  <- max(x[x <= cerca_sup], na.rm = TRUE)
+n_atipicos  <- nrow(atipicos_df)
+
+# 5. Dataframe de estructura para geom_boxplot (stat = "identity")
+estad_box <- tibble(
+  grupo  = "Motivación Académica",
+  ymin   = bigote_inf,
+  lower  = q1,
+  middle = med,
+  upper  = q3,
+  ymax   = bigote_sup
+)
+
+# 6. Generación del Gráfico de Alto Impacto
+ggplot() +
+  # Capa de Boxplot Ajustado
+  geom_boxplot(
+    data = estad_box,
+    aes(x = grupo, ymin = ymin, lower = lower, middle = middle,
+        upper = upper, ymax = ymax),
+    stat = "identity", width = 0.35,
+    fill = "#5499C7", color = "#1a2a3a", 
+    alpha = 0.7, linewidth = 0.7, fatten = 2
+  ) +
+  
+  # Líneas de las Cercas de Detección (Fronteras Teóricas)
+  geom_hline(yintercept = cerca_sup, linetype = "dashed", 
+             color = "#E74C3C", linewidth = 0.5, alpha = 0.8) +
+  geom_hline(yintercept = cerca_inf, linetype = "dashed", 
+             color = "#E74C3C", linewidth = 0.5, alpha = 0.8) +
+  
+  # Representación de Atípicos (si existen)
+  { if (n_atipicos > 0)
+      geom_jitter(data = atipicos_df, aes(x = "Motivación Académica", y = Motivacion),
+                  shape = 21, fill = "#E74C3C", color = "#7B0D0D",
+                  size = 3, stroke = 0.8, width = 0.05, alpha = 0.9)
+  } +
+  
+  # Anotaciones de Métricas de Posición (Q1, Mediana, Q3)
+  annotate("text", x = 0.70, y = q1, label = paste0("Q1: ", round(q1, 2)),
+           size = 3.5, hjust = 0, color = "#2980B9", fontface = "bold") +
+  annotate("text", x = 1.30, y = med, label = paste0("Mediana: ", round(med, 2)),
+           size = 3.5, hjust = 0, color = "#27AE60", fontface = "bold") +
+  annotate("text", x = 0.70, y = q3, label = paste0("Q3: ", round(q3, 2)),
+           size = 3.5, hjust = 0, color = "#8E44AD", fontface = "bold") +
+  
+  # Etiquetas de las Cercas (Ajustadas para visibilidad)
+  annotate("text", x = 1.32, y = cerca_sup, label = paste("Cerca Sup:", round(cerca_sup, 2)),
+           size = 3.2, hjust = 0, color = "#C0392B", fontface = "italic") +
+  annotate("text", x = 1.32, y = cerca_inf, label = paste("Cerca Inf:", round(cerca_inf, 2)),
+           size = 3.2, hjust = 0, color = "#C0392B", fontface = "italic") +
+  
+  # Configuración de Ejes y Escalas (Asegura ver las cercas fuera del rango 1-10)
+  scale_x_discrete(expand = expansion(mult = c(0.7, 1.2))) +
+  scale_y_continuous(
+    breaks = seq(floor(cerca_inf), ceiling(cerca_sup), 2),
+    limits = c(cerca_inf - 1, cerca_sup + 1)
+  ) +
+  
+  # Títulos y Metadatos (Caption de Rigor)
+  labs(
+    title    = "Detección de Atípicos en Motivación Académica",
+    subtitle = "Basado en Score de Motivación (1-10) · Ajuste de Hubert para distribuciones sesgadas",
+    x        = NULL,
+    y        = "Motivación Académica",
+    caption  = paste0(
+      "Muestra (n) = ", length(x),
+      "  ·  Medcouple (MC) = ", round(mc_val, 4),
+      "  ·  Atípicos detectados: ", n_atipicos,
+      "\nCercas de detección: [", round(cerca_inf, 2), ", ", round(cerca_sup, 2), "]"
+    )
+  ) +
+  
+  # Estética Profesional Final
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title         = element_text(face = "bold", size = 15, color = "#1a2a3a"),
+    plot.subtitle      = element_text(size = 11, color = "#5D6D7E", margin = margin(b = 12)),
+    plot.caption       = element_text(size = 9, color = "#7F8C8D", hjust = 0, lineheight = 1.2),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.y = element_line(color = "#F2F4F4", linewidth = 0.5),
+    plot.margin        = margin(20, 40, 20, 20)
+  )
+```
+
+```{r}
+library(tidyverse)
+
+x        <- datos$academic_motivation
+media    <- mean(x)
+de       <- sd(x)
+varianza <- var(x)
+minimo   <- min(x)
+maximo   <- max(x)
+rango    <- maximo - minimo
+
+dens    <- density(x)
+dens_df <- tibble(val = dens$x, den = dens$y)
+
+sd_df    <- dens_df |> filter(val >= (media - de), val <= (media + de))
+rango_df <- dens_df |> filter(val >= minimo, val <= maximo)
+
+dens_min <- ifelse(is.na(approx(dens$x, dens$y, xout = minimo)$y), 0,
+                   approx(dens$x, dens$y, xout = minimo)$y)
+dens_max <- ifelse(is.na(approx(dens$x, dens$y, xout = maximo)$y), 0,
+                   approx(dens$x, dens$y, xout = maximo)$y)
+
+y_max <- max(dens_df$den)
+x_rng <- diff(range(dens_df$val))
+x_end <- max(dens_df$val)
+
+bx0 <- x_end + x_rng * 0.06
+bx1 <- x_end + x_rng * 0.52
+bcx <- (bx0 + bx1) / 2
+bix <- bx0 + (bx1 - bx0) * 0.12
+btx <- bx0 + (bx1 - bx0) * 0.24
+
+ggplot(dens_df, aes(x = val, y = den)) +
+  geom_area(data = rango_df, aes(x = val, y = den),
+            fill = "#D6EAF8", alpha = 0.55, inherit.aes = FALSE) +
+  geom_area(data = sd_df, aes(x = val, y = den),
+            fill = "#5DADE2", alpha = 0.65, inherit.aes = FALSE) +
+  geom_line(color = "#1a2a3a", linewidth = 1.1) +
+  geom_vline(xintercept = media, linetype = "dashed",
+             color = "#E74C3C", linewidth = 0.75) +
+  geom_point(
+    data = tibble(v = c(minimo, maximo), d = c(dens_min, dens_max)),
+    aes(x = v, y = d),
+    shape = 18, size = 4.5, color = "#1a2a3a", inherit.aes = FALSE
+  ) +
+  # ══ CAJA 1: Métricas de Control ══════════════════════════════════════════════
+  annotate("rect", xmin = bx0, xmax = bx1,
+           ymin = y_max * 0.695, ymax = y_max * 1.02,
+           fill = "white", color = "#BDC3C7", linewidth = 0.45) +
+  annotate("text", x = bcx, y = y_max * 0.965,
+           label = "M\u00e9tricas de Control",
+           fontface = "bold", size = 3.0, color = "#1a2a3a", hjust = 0.5) +
+  annotate("point", x = bix, y = y_max * 0.875,
+           shape = 18, size = 3.0, color = "#1a2a3a") +
+  annotate("text", x = btx, y = y_max * 0.875,
+           label = "L\u00edmites de la muestra",
+           size = 2.8, color = "#1a2a3a", hjust = 0) +
+  annotate("segment",
+           x    = bix - (bx1 - bx0) * 0.05,
+           xend = bix + (bx1 - bx0) * 0.05,
+           y    = y_max * 0.782, yend = y_max * 0.782,
+           linetype = "dashed", color = "#E74C3C", linewidth = 0.65) +
+  annotate("text", x = btx, y = y_max * 0.782,
+           label = paste0("Media: ", round(media, 2)),
+           size = 2.8, color = "#E74C3C", hjust = 0) +
+  # ══ CAJA 2: Áreas de Dispersión ══════════════════════════════════════════════
+  annotate("rect", xmin = bx0, xmax = bx1,
+           ymin = y_max * 0.36, ymax = y_max * 0.68,
+           fill = "white", color = "#BDC3C7", linewidth = 0.45) +
+  annotate("text", x = bcx, y = y_max * 0.638,
+           label = "\u00c1reas de Dispersi\u00f3n",
+           fontface = "bold", size = 3.0, color = "#1a2a3a", hjust = 0.5) +
+  annotate("rect",
+           xmin = bix - (bx1 - bx0) * 0.06,
+           xmax = bix + (bx1 - bx0) * 0.06,
+           ymin = y_max * 0.545, ymax = y_max * 0.595,
+           fill = "#5DADE2", color = NA, alpha = 0.8) +
+  annotate("text", x = btx, y = y_max * 0.570,
+           label = paste0("\u00b11 DE: [", round(media - de, 2),
+                          " \u2013 ", round(media + de, 2), "]"),
+           size = 2.8, color = "#1a2a3a", hjust = 0) +
+  annotate("rect",
+           xmin = bix - (bx1 - bx0) * 0.06,
+           xmax = bix + (bx1 - bx0) * 0.06,
+           ymin = y_max * 0.448, ymax = y_max * 0.498,
+           fill = "#D6EAF8", color = NA, alpha = 0.8) +
+  annotate("text", x = btx, y = y_max * 0.473,
+           label = paste0("Rango: [", minimo, " \u2013 ", maximo, "]"),
+           size = 2.8, color = "#1a2a3a", hjust = 0) +
+  # ══ CAJA 3: Estadísticos aislados ════════════════════════════════════════════
+  annotate("rect", xmin = bx0, xmax = bx1,
+           ymin = y_max * 0.02, ymax = y_max * 0.34,
+           fill = "white", color = "#BDC3C7", linewidth = 0.45) +
+  annotate("text", x = bcx, y = y_max * 0.298,
+           label = "Estad\u00edsticos",
+           fontface = "bold", size = 3.0, color = "#1a2a3a", hjust = 0.5) +
+  annotate("text", x = bx0 + (bx1 - bx0) * 0.08, y = y_max * 0.230,
+           label = paste0("Varianza:  ", round(varianza, 3)),
+           size = 2.8, color = "#8E44AD", hjust = 0) +
+  annotate("text", x = bx0 + (bx1 - bx0) * 0.08, y = y_max * 0.160,
+           label = paste0("M\u00ednimo:   ", minimo),
+           size = 2.8, color = "#27AE60", hjust = 0) +
+  annotate("text", x = bx0 + (bx1 - bx0) * 0.08, y = y_max * 0.090,
+           label = paste0("M\u00e1ximo:   ", maximo),
+           size = 2.8, color = "#2980B9", hjust = 0) +
+  coord_cartesian(clip = "off") +
+  scale_x_continuous(expand = expansion(add = c(0, x_rng * 0.58))) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  labs(
+    title    = "Distribuci\u00f3n de Motivaci\u00f3n Acad\u00e9mica \u2014 An\u00e1lisis de Dispersi\u00f3n",
+    subtitle = "Densidad kernel con \u00e1reas de dispersi\u00f3n y m\u00e9tricas estad\u00edsticas",
+    x        = "Motivaci\u00f3n Acad\u00e9mica",
+    y        = "Densidad",
+    caption  = paste0(
+      "n = ", length(x),
+      "  \u00b7  Media: ", round(media, 2),
+      "  \u00b7  DE: ", round(de, 2),
+      "  \u00b7  Varianza: ", round(varianza, 2),
+      "  \u00b7  Rango: ", rango, " [", minimo, " \u2013 ", maximo, "]"
+    )
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title         = element_text(face = "bold", size = 14.5, color = "#1a2a3a"),
+    plot.subtitle      = element_text(size = 10.5, color = "#5D6D7E", margin = margin(b = 8)),
+    plot.caption       = element_text(size = 8.5, color = "#95A5A6", hjust = 0),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major   = element_line(color = "#ECF0F1", linewidth = 0.4),
+    axis.text          = element_text(color = "#2C3E50"),
+    legend.position    = "none",
+    plot.margin        = margin(16, 8, 12, 16)
+  )
+```
+
+```{r}
+library(tidyverse)
+library(scales)
+
+# Tabla de frecuencias con orden ordinal explícito
+niveles_uso <- c("Never", "Sometimes", "Often", "Always")
+
+freq_late <- datos |>
+  mutate(late_night_usage = factor(late_night_usage, levels = niveles_uso)) |>
+  count(late_night_usage, .drop = FALSE) |>
+  mutate(
+    pct     = n / sum(n),
+    pct_lab = percent(pct, accuracy = 0.1)
+  )
+
+ggplot(freq_late, aes(x = late_night_usage, y = n, fill = late_night_usage)) +
+  geom_col(width = 0.65, color = "white", linewidth = 0.3) +
+  geom_text(
+    aes(label = pct_lab),
+    vjust = -0.6, size = 3.8, fontface = "bold", color = "#2C3E50"
+  ) +
+  scale_fill_viridis_d(option = "D", begin = 0.25, end = 0.85) +
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.12)),
+    labels = label_comma()
+  ) +
+  labs(
+    title    = "Frecuencia de Uso Nocturno de Dispositivos",
+    subtitle = "Variable ordinal: late_night_usage (Never \u2192 Always)",
+    x        = "Nivel de uso nocturno",
+    y        = "Frecuencia absoluta",
+    caption  = paste0("n = ", format(sum(freq_late$n), big.mark = ","))
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 15, color = "#1a2a3a"),
+    plot.subtitle    = element_text(size = 11, color = "#5D6D7E", margin = margin(b = 10)),
+    plot.caption     = element_text(size = 9, color = "#95A5A6", hjust = 0),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.y = element_line(color = "#ECF0F1", linewidth = 0.4),
+    axis.text        = element_text(color = "#2C3E50"),
+    legend.position  = "none",
+    plot.margin      = margin(16, 16, 12, 16)
+  )
+```
+
+```{r}
+library(tidyverse)
+library(scales)
+
+# Tabla de frecuencias ordenada por frecuencia descendente (Pareto)
+freq_device <- datos |>
+  count(device_access, sort = TRUE) |>
+  mutate(
+    device_access = fct_reorder(device_access, n, .desc = TRUE),
+    pct           = n / sum(n),
+    pct_lab       = percent(pct, accuracy = 0.1)
+  )
+
+ggplot(freq_device, aes(x = device_access, y = n, fill = device_access)) +
+  geom_col(width = 0.65, color = "white", linewidth = 0.3) +
+  geom_text(
+    aes(label = pct_lab),
+    vjust = -0.6, size = 3.8, fontface = "bold", color = "#2C3E50"
+  ) +
+  scale_fill_brewer(palette = "Set2") +
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.12)),
+    labels = label_comma()
+  ) +
+  labs(
+    title    = "Acceso a Dispositivos Digitales",
+    subtitle = "Ordenamiento Pareto por frecuencia descendente",
+    x        = "Tipo de dispositivo",
+    y        = "Frecuencia absoluta",
+    caption  = paste0("n = ", format(sum(freq_device$n), big.mark = ","))
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 15, color = "#1a2a3a"),
+    plot.subtitle    = element_text(size = 11, color = "#5D6D7E", margin = margin(b = 10)),
+    plot.caption     = element_text(size = 9, color = "#95A5A6", hjust = 0),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.y = element_line(color = "#ECF0F1", linewidth = 0.4),
+    axis.text        = element_text(color = "#2C3E50"),
+    legend.position  = "none",
+    plot.margin      = margin(16, 16, 12, 16)
+  )
+```
+
+```{r}
+# ══════════════════════════════════════════════════════════════════════════════
+# PCA con variables cualitativas suplementarias (FactoMineR::PCA)
+# Variables activas (cuantitativas): academic_motivation, social_media_hours
+# Variables suplementarias (cualitativas): late_night_usage, device_access
+# ══════════════════════════════════════════════════════════════════════════════
+
+library(tidyverse)
+library(FactoMineR)
+library(factoextra)
+
+# ── 1. Pre-procesamiento ─────────────────────────────────────────────────────
+set.seed(42)
+n_sample <- 5000  # Submuestreo estratificado para viabilidad computacional
+
+df_famd <- datos |>
+  select(academic_motivation, social_media_hours,
+         late_night_usage, device_access) |>
+  drop_na() |>
+  mutate(
+    late_night_usage = factor(late_night_usage,
+                              levels = c("Never", "Sometimes", "Often", "Always"),
+                              ordered = TRUE),
+    device_access    = factor(device_access)
+  ) |>
+  slice_sample(n = n_sample)
+
+# Índices de columnas cualitativas (suplementarias)
+idx_quali_sup <- which(names(df_famd) %in% c("late_night_usage", "device_access"))
+
+# ── 2. Ejecución PCA con variables cualitativas suplementarias ───────────────
+# PCA opera sobre las 2 variables cuantitativas activas (academic_motivation,
+# social_media_hours). Las cualitativas se proyectan como suplementarias
+# (quali.sup) sin intervenir en la construcción de los ejes principales.
+res_pca <- PCA(df_famd, quali.sup = idx_quali_sup, graph = FALSE, scale.unit = TRUE)
+
+# ── 3. Extracción de coordenadas ─────────────────────────────────────────────
+# 3a. Individuos (coloreados por late_night_usage)
+ind_coords <- as_tibble(res_pca$ind$coord[, 1:2]) |>
+  rename(Dim1 = Dim.1, Dim2 = Dim.2) |>
+  mutate(late_night = df_famd$late_night_usage)
+
+# 3b. Variables cuantitativas (vectores/flechas)
+quanti_coords <- as_tibble(res_pca$var$coord[, 1:2], rownames = "variable") |>
+  rename(Dim1 = Dim.1, Dim2 = Dim.2)
+
+# 3c. Centroides de las categorías cualitativas suplementarias
+quali_coords <- as_tibble(res_pca$quali.sup$coord[, 1:2], rownames = "categoria") |>
+  rename(Dim1 = Dim.1, Dim2 = Dim.2) |>
+  mutate(
+    tipo = ifelse(categoria %in% levels(df_famd$late_night_usage),
+                  "late_night_usage", "device_access")
+  )
+
+# 3d. Varianza explicada por eje
+eig <- get_eigenvalue(res_pca)
+pct1 <- round(eig[1, "variance.percent"], 1)
+pct2 <- round(eig[2, "variance.percent"], 1)
+
+# ── 4. Biplot limpio: solo formas + leyendas externas ────────────────────────
+# Sin etiquetas de texto dentro del gráfico. Todo se identifica por forma,
+# color y las leyendas laterales.
+
+# Preparar centroides con labels para leyendas
+quali_late <- quali_coords |>
+  filter(tipo == "late_night_usage") |>
+  mutate(cat_label = factor(categoria,
+    levels = c("Never", "Sometimes", "Often", "Always"),
+    labels = c("Nunca", "A veces", "Frecuente", "Siempre")
+  ))
+
+quali_device <- quali_coords |>
+  filter(tipo == "device_access")
+
+# Preparar labels de flechas para leyenda
+quanti_coords <- quanti_coords |>
+  mutate(variable_label = case_when(
+    variable == "academic_motivation" ~ "Motivaci\u00f3n Acad\u00e9mica",
+    variable == "social_media_hours"  ~ "Horas Redes Sociales",
+    TRUE ~ variable
+  ))
+
+# Escalado de flechas
+arrow_scale <- max(abs(range(ind_coords$Dim1)),
+                   abs(range(ind_coords$Dim2))) * 0.7
+
+paleta_uso <- c(Nunca = "#2166AC", `A veces` = "#67A9CF",
+                Frecuente = "#EF8A62", Siempre = "#B2182B")
+
+ggplot() +
+  # Capa 1: Elipses rellenas al 95% por uso nocturno
+  stat_ellipse(
+    data = ind_coords |>
+      mutate(late_night = factor(late_night,
+        levels = c("Never", "Sometimes", "Often", "Always"),
+        labels = c("Nunca", "A veces", "Frecuente", "Siempre")
+      )),
+    aes(x = Dim1, y = Dim2, fill = late_night, color = late_night),
+    level = 0.95, linewidth = 1, geom = "polygon", alpha = 0.12
+  ) +
+  # Capa 2: Flechas de variables cuantitativas (se identifican por leyenda)
+  geom_segment(
+    data = quanti_coords,
+    aes(x = 0, y = 0, xend = Dim1 * arrow_scale, yend = Dim2 * arrow_scale,
+        linetype = variable_label),
+    arrow = arrow(length = unit(0.3, "cm"), type = "closed"),
+    color = "#1B4332", linewidth = 1.3
+  ) +
+  # Capa 3: Centroides uso nocturno (cuadrados — mapeados a leyenda)
+  geom_point(
+    data = quali_late,
+    aes(x = Dim1, y = Dim2, shape = "Uso nocturno"),
+    size = 5, color = "#1a2a3a"
+  ) +
+  # Capa 4: Centroides device_access (tri\u00e1ngulos — mapeados a leyenda)
+  geom_point(
+    data = quali_device,
+    aes(x = Dim1, y = Dim2, shape = "Tipo dispositivo"),
+    size = 5, color = "#B2182B"
+  ) +
+  # Ejes de referencia
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey75", linewidth = 0.3) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey75", linewidth = 0.3) +
+  # Escalas
+  scale_color_manual(values = paleta_uso, name = NULL) +
+  scale_fill_manual(values = paleta_uso, guide = "none") +
+  scale_shape_manual(
+    values = c("Uso nocturno" = 15, "Tipo dispositivo" = 17),
+    name   = "Centroides"
+  ) +
+  scale_linetype_manual(
+    values = c("Motivaci\u00f3n Acad\u00e9mica" = "solid",
+               "Horas Redes Sociales" = "dashed"),
+    name   = "Variables activas"
+  ) +
+  guides(
+    color    = guide_legend(order = 1, override.aes = list(fill = unname(paleta_uso), alpha = 0.3)),
+    shape    = guide_legend(order = 2),
+    linetype = guide_legend(order = 3, override.aes = list(color = "#1B4332", linewidth = 1))
+  ) +
+  # Etiquetas
+  labs(
+    title    = "\u00bfInfluye el estilo de vida digital en la motivaci\u00f3n acad\u00e9mica?",
+    subtitle = paste0(
+      "PCA Biplot \u00b7 Variables suplementarias cualitativas (FactoMineR) \u00b7 ",
+      "n = ", format(n_sample, big.mark = ",")
+    ),
+    x = paste0("Dim 1 (", pct1, "% varianza explicada)"),
+    y = paste0("Dim 2 (", pct2, "% varianza explicada)"),
+    caption = paste0(
+      "Centroides \u25a0: ", paste(quali_late$cat_label, collapse = ", "),
+      " (uso nocturno)\n",
+      "Centroides \u25b2: ", paste(quali_device$categoria, collapse = ", "),
+      " (dispositivo)\n",
+      "Elipses: intervalo de confianza al 95% por nivel de uso nocturno"
+    )
+  ) +
+  coord_fixed(ratio = 1) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 15, color = "#1a2a3a"),
+    plot.subtitle    = element_text(size = 10.5, color = "#5D6D7E", margin = margin(b = 10)),
+    plot.caption     = element_text(size = 8.5, color = "#95A5A6", hjust = 0, lineheight = 1.3),
+    legend.position  = "right",
+    legend.title     = element_text(face = "bold", size = 10),
+    legend.text      = element_text(size = 9),
+    legend.spacing.y = unit(8, "pt"),
+    legend.box       = "vertical",
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(color = "#F2F4F4", linewidth = 0.4),
+    axis.text        = element_text(color = "#2C3E50"),
+    plot.margin      = margin(16, 20, 12, 16)
+  )
+```
+
+```{}
+```
