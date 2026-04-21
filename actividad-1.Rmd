@@ -903,3 +903,567 @@ ggplot() +
 
 ```{}
 ```
+
+# %% ── 1. LIBRERÍAS ──────────────────────────────────────────────────────────
+
+```{r bootstrap-librerias, message=FALSE, warning=FALSE}
+library(boot)
+library(ggplot2)
+```
+
+# %% ── 2. Q-Q PLOT — Horas en Redes Sociales ────────────────────────────────
+
+```{r qq-horas-redes, message=FALSE, warning=FALSE}
+# ══════════════════════════════════════════════════════════════════════════════
+# GRÁFICO Q-Q NORMAL CON BANDA DE CONFIANZA — social_media_hours
+# Banda pointwise al 95 % basada en teoría asintótica de estadísticos de orden
+# ══════════════════════════════════════════════════════════════════════════════
+
+horas <- na.omit(datos$social_media_hours)
+n_h   <- length(horas)
+
+# Cuantiles teóricos y muestrales ordenados
+p_h    <- ppoints(n_h)
+theo_h <- qnorm(p_h)
+obs_h  <- sort(horas)
+
+# Parámetros de la recta de referencia (Q1–Q3)
+slope_h     <- diff(quantile(horas, c(0.25, 0.75))) / diff(qnorm(c(0.25, 0.75)))
+intercept_h <- quantile(horas, 0.25) - slope_h * qnorm(0.25)
+
+# Error estándar pointwise y banda al 95 %
+se_h    <- (slope_h / dnorm(theo_h)) * sqrt(p_h * (1 - p_h) / n_h)
+z_crit  <- qnorm(0.975)
+qq_df_h <- data.frame(
+  theo  = theo_h,
+  obs   = obs_h,
+  upper = intercept_h + slope_h * theo_h + z_crit * se_h,
+  lower = intercept_h + slope_h * theo_h - z_crit * se_h
+)
+
+p_qq_horas <- ggplot(qq_df_h, aes(x = theo, y = obs)) +
+  # Banda de confianza al 95 %
+  geom_ribbon(aes(ymin = lower, ymax = upper),
+              fill = "#B0C4DE", alpha = 0.40) +
+  # Recta de referencia normal
+  geom_abline(intercept = intercept_h, slope = slope_h,
+              color = "#E63946", linewidth = 0.9, linetype = "dashed") +
+  # Puntos de cuantiles muestrales
+  geom_point(color = "#1a2a3a", size = 1.4, alpha = 0.55) +
+  labs(
+    title    = "Q-Q Normal \u2014 Horas Diarias en Redes Sociales",
+    subtitle = paste0(
+      "Banda de confianza pointwise al 95\u202f%  \u00b7  n\u202f=\u202f",
+      format(n_h, big.mark = ",")
+    ),
+    x       = "Cuantiles te\u00f3ricos (Normal est\u00e1ndar)",
+    y       = "Cuantiles muestrales (horas/d\u00eda)",
+    caption = "Recta de referencia: pendiente Q1-Q3  \u00b7  Banda: IC 95\u202f% asint\u00f3tico de estad\u00edsticos de orden"
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 15, color = "#1a2a3a", hjust = 0.5),
+    plot.subtitle = element_text(size = 10.5, color = "#5D6D7E", hjust = 0.5,
+                                 margin = margin(b = 8)),
+    plot.caption  = element_text(size = 8.5, color = "#95A5A6", hjust = 0),
+    axis.text     = element_text(color = "#2C3E50"),
+    plot.margin   = margin(18, 20, 14, 18)
+  )
+
+print(p_qq_horas)
+
+ggsave("qq_horas_redes.png", plot = p_qq_horas,
+       width = 10, height = 6, dpi = 300, bg = "white")
+```
+
+# %% ── 3. BOOTSTRAP — Mediana de Horas en Redes Sociales ─────────────────────
+
+```{r bootstrap-mediana-horas-redes, message=FALSE, warning=FALSE}
+# ══════════════════════════════════════════════════════════════════════════════
+# BOOTSTRAP NO PARAMÉTRICO — Mediana de Horas en Redes Sociales
+# Variable: social_media_hours  |  Estadístico: mediana  |  R = 1 000 réplicas
+# IC al 95 % — método percentil
+# ══════════════════════════════════════════════════════════════════════════════
+
+set.seed(2024)
+
+# 1. Función estadístico para boot(): devuelve la mediana de la sub-muestra
+stat_mediana <- function(x, idx) median(x[idx])
+
+# 2. Bootstrap con 1 000 réplicas
+boot_horas <- boot(data = horas, statistic = stat_mediana, R = 1000)
+
+# 3. Intervalo de confianza al 95 % (percentil)
+ic_horas <- boot.ci(boot_horas, conf = 0.95, type = "perc")
+
+# Valores de referencia
+mediana_obs <- boot_horas$t0
+ic_inf      <- ic_horas$percent[4]
+ic_sup      <- ic_horas$percent[5]
+bias_h      <- mean(boot_horas$t) - boot_horas$t0   # sesgo bootstrap
+se_h        <- sd(boot_horas$t)                      # error estándar bootstrap
+
+# 4. Data frame de la distribución bootstrap
+boot_df <- data.frame(mediana_boot = boot_horas$t)
+
+# 5. Data frame para la banda sombreada del IC
+dens_obj  <- density(boot_df$mediana_boot, adjust = 1.2)
+dens_full <- data.frame(x = dens_obj$x, y = dens_obj$y)
+dens_ic   <- subset(dens_full, x >= ic_inf & x <= ic_sup)
+
+# 6. Gráfico de densidad bootstrap con IC sombreado
+p_horas <- ggplot(boot_df, aes(x = mediana_boot)) +
+  # Banda del intervalo de confianza al 95 %
+  geom_area(
+    data = dens_ic, aes(x = x, y = y),
+    fill = "#2DC653", alpha = 0.30, inherit.aes = FALSE
+  ) +
+  # Curva de densidad bootstrap
+  geom_density(
+    adjust    = 1.2,
+    color     = "#1a2a3a",
+    linewidth = 1.0,
+    fill      = "#B0C4DE",
+    alpha     = 0.18
+  ) +
+  # Línea: mediana observada
+  geom_vline(
+    xintercept = mediana_obs,
+    color      = "#E63946",
+    linewidth  = 1.0,
+    linetype   = "solid"
+  ) +
+  # Líneas: límites del IC
+  geom_vline(
+    xintercept = ic_inf,
+    color      = "#2DC653",
+    linewidth  = 0.85,
+    linetype   = "dashed"
+  ) +
+  geom_vline(
+    xintercept = ic_sup,
+    color      = "#2DC653",
+    linewidth  = 0.85,
+    linetype   = "dashed"
+  ) +
+  # Etiquetas de valores sobre las líneas
+  annotate("text", x = mediana_obs, y = Inf,
+           label = paste0("Mediana\n", round(mediana_obs, 4)),
+           vjust = 1.4, hjust = -0.1,
+           color = "#E63946", size = 3.5, fontface = "bold") +
+  annotate("text", x = ic_inf, y = Inf,
+           label = paste0("LI\n", round(ic_inf, 4)),
+           vjust = 1.4, hjust = 1.1,
+           color = "#1B7A34", size = 3.2, fontface = "bold") +
+  annotate("text", x = ic_sup, y = Inf,
+           label = paste0("LS\n", round(ic_sup, 4)),
+           vjust = 1.4, hjust = -0.1,
+           color = "#1B7A34", size = 3.2, fontface = "bold") +
+  # Caja: sesgo y error estándar bootstrap
+  annotate("label",
+           x = Inf, y = -Inf,
+           label = paste0(
+             "Sesgo:  ", round(bias_h, 4), "\n",
+             "Error est\u00e1ndar:  ", round(se_h, 4)
+           ),
+           hjust = 1.05, vjust = -0.3,
+           size = 3.3, color = "#2C3E50",
+           fill = "#F8F9FA", label.size = 0.35,
+           fontface = "italic") +
+  labs(
+    title    = "Bootstrap \u2014 Mediana de Horas en Redes Sociales",
+    subtitle = paste0(
+      "Bootstrap no param\u00e9trico \u00b7 R = 1\u202f000 r\u00e9plicas \u00b7 IC 95\u202f% (percentil): [",
+      round(ic_inf, 4), ", ", round(ic_sup, 4), "]"
+    ),
+    x       = "Mediana bootstrap (horas/d\u00eda)",
+    y       = "Densidad",
+    caption = paste0(
+      "n = ", length(horas),
+      "  \u00b7  Mediana observada: ", round(mediana_obs, 4),
+      "  \u00b7  Sesgo: ", round(bias_h, 4),
+      "  \u00b7  Error est\u00e1ndar: ", round(se_h, 4),
+      "\n  \u00b7  Amplitud IC: ", round(ic_sup - ic_inf, 4),
+      "  \u00b7  Banda verde = IC 95\u202f%"
+    )
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 15, color = "#1a2a3a", hjust = 0.5),
+    plot.subtitle = element_text(size = 10.5, color = "#5D6D7E", hjust = 0.5,
+                                 margin = margin(b = 8)),
+    plot.caption  = element_text(size = 8.5, color = "#95A5A6", hjust = 0),
+    axis.text     = element_text(color = "#2C3E50"),
+    plot.margin   = margin(18, 20, 14, 18)
+  )
+
+print(p_horas)
+
+# 7. Exportar en PNG de alta resolución (300 dpi)
+ggsave(
+  filename = "bootstrap_mediana_horas_redes.png",
+  plot     = p_horas,
+  width    = 10,
+  height   = 6,
+  dpi      = 300,
+  bg       = "white"
+)
+```
+
+# %% ── 4. Q-Q PLOT — Motivación Académica ────────────────────────────────────
+
+```{r qq-motivacion-academica, message=FALSE, warning=FALSE}
+# ══════════════════════════════════════════════════════════════════════════════
+# GRÁFICO Q-Q NORMAL CON BANDA DE CONFIANZA — academic_motivation
+# Banda pointwise al 95 % basada en teoría asintótica de estadísticos de orden
+# ══════════════════════════════════════════════════════════════════════════════
+
+motiv <- na.omit(datos$academic_motivation)
+n_m   <- length(motiv)
+
+# Cuantiles teóricos y muestrales ordenados
+p_m    <- ppoints(n_m)
+theo_m <- qnorm(p_m)
+obs_m  <- sort(motiv)
+
+# Parámetros de la recta de referencia (Q1–Q3)
+slope_m     <- diff(quantile(motiv, c(0.25, 0.75))) / diff(qnorm(c(0.25, 0.75)))
+intercept_m <- quantile(motiv, 0.25) - slope_m * qnorm(0.25)
+
+# Error estándar pointwise y banda al 95 %
+se_m    <- (slope_m / dnorm(theo_m)) * sqrt(p_m * (1 - p_m) / n_m)
+qq_df_m <- data.frame(
+  theo  = theo_m,
+  obs   = obs_m,
+  upper = intercept_m + slope_m * theo_m + z_crit * se_m,
+  lower = intercept_m + slope_m * theo_m - z_crit * se_m
+)
+
+p_qq_motiv <- ggplot(qq_df_m, aes(x = theo, y = obs)) +
+  # Banda de confianza al 95 %
+  geom_ribbon(aes(ymin = lower, ymax = upper),
+              fill = "#A9D6E5", alpha = 0.40) +
+  # Recta de referencia normal
+  geom_abline(intercept = intercept_m, slope = slope_m,
+              color = "#D62828", linewidth = 0.9, linetype = "dashed") +
+  # Puntos de cuantiles muestrales
+  geom_point(color = "#1a2a3a", size = 1.4, alpha = 0.55) +
+  labs(
+    title    = "Q-Q Normal \u2014 Motivaci\u00f3n Acad\u00e9mica",
+    subtitle = paste0(
+      "Banda de confianza pointwise al 95\u202f%  \u00b7  n\u202f=\u202f",
+      format(n_m, big.mark = ",")
+    ),
+    x       = "Cuantiles te\u00f3ricos (Normal est\u00e1ndar)",
+    y       = "Cuantiles muestrales (motivaci\u00f3n)",
+    caption = "Recta de referencia: pendiente Q1-Q3  \u00b7  Banda: IC 95\u202f% asint\u00f3tico de estad\u00edsticos de orden"
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 15, color = "#1a2a3a", hjust = 0.5),
+    plot.subtitle = element_text(size = 10.5, color = "#5D6D7E", hjust = 0.5,
+                                 margin = margin(b = 8)),
+    plot.caption  = element_text(size = 8.5, color = "#95A5A6", hjust = 0),
+    axis.text     = element_text(color = "#2C3E50"),
+    plot.margin   = margin(18, 20, 14, 18)
+  )
+
+print(p_qq_motiv)
+
+ggsave("qq_motivacion_academica.png", plot = p_qq_motiv,
+       width = 10, height = 6, dpi = 300, bg = "white")
+```
+
+# %% ── 5. BOOTSTRAP — Desviación Estándar de Motivación Académica ─────────────
+
+```{r bootstrap-sd-motivacion-academica, message=FALSE, warning=FALSE}
+# ══════════════════════════════════════════════════════════════════════════════
+# BOOTSTRAP NO PARAMÉTRICO — Desviación Estándar de Motivación Académica
+# Variable: academic_motivation  |  Estadístico: sd  |  R = 1 000 réplicas
+# IC al 95 % — método percentil
+# ══════════════════════════════════════════════════════════════════════════════
+
+set.seed(2024)
+
+# 1. Función estadístico para boot(): devuelve la DE de la sub-muestra
+stat_sd <- function(x, idx) sd(x[idx])
+
+# 2. Bootstrap con 1 000 réplicas
+boot_motiv <- boot(data = motiv, statistic = stat_sd, R = 1000)
+
+# 3. Intervalo de confianza al 95 % (percentil)
+ic_motiv <- boot.ci(boot_motiv, conf = 0.95, type = "perc")
+
+# Valores de referencia
+sd_obs   <- boot_motiv$t0
+ic_inf_m <- ic_motiv$percent[4]
+ic_sup_m <- ic_motiv$percent[5]
+bias_m   <- mean(boot_motiv$t) - boot_motiv$t0   # sesgo bootstrap
+se_m     <- sd(boot_motiv$t)                      # error estándar bootstrap
+
+# 4. Data frame de la distribución bootstrap
+boot_df_m <- data.frame(sd_boot = boot_motiv$t)
+
+# 5. Data frame para la banda sombreada del IC
+dens_obj_m  <- density(boot_df_m$sd_boot, adjust = 1.2)
+dens_full_m <- data.frame(x = dens_obj_m$x, y = dens_obj_m$y)
+dens_ic_m   <- subset(dens_full_m, x >= ic_inf_m & x <= ic_sup_m)
+
+# 6. Gráfico de densidad bootstrap con IC sombreado
+p_motiv <- ggplot(boot_df_m, aes(x = sd_boot)) +
+  # Banda del intervalo de confianza al 95 %
+  geom_area(
+    data = dens_ic_m, aes(x = x, y = y),
+    fill = "#F77F00", alpha = 0.30, inherit.aes = FALSE
+  ) +
+  # Curva de densidad bootstrap
+  geom_density(
+    adjust    = 1.2,
+    color     = "#1a2a3a",
+    linewidth = 1.0,
+    fill      = "#A9D6E5",
+    alpha     = 0.18
+  ) +
+  # Línea: DE observada
+  geom_vline(
+    xintercept = sd_obs,
+    color      = "#D62828",
+    linewidth  = 1.0,
+    linetype   = "solid"
+  ) +
+  # Líneas: límites del IC
+  geom_vline(
+    xintercept = ic_inf_m,
+    color      = "#C97000",
+    linewidth  = 0.85,
+    linetype   = "dashed"
+  ) +
+  geom_vline(
+    xintercept = ic_sup_m,
+    color      = "#C97000",
+    linewidth  = 0.85,
+    linetype   = "dashed"
+  ) +
+  # Etiquetas de valores sobre las líneas
+  annotate("text", x = sd_obs, y = Inf,
+           label = paste0("DE\n", round(sd_obs, 4)),
+           vjust = 1.4, hjust = -0.1,
+           color = "#D62828", size = 3.5, fontface = "bold") +
+  annotate("text", x = ic_inf_m, y = Inf,
+           label = paste0("LI\n", round(ic_inf_m, 4)),
+           vjust = 1.4, hjust = 1.1,
+           color = "#7A4200", size = 3.2, fontface = "bold") +
+  annotate("text", x = ic_sup_m, y = Inf,
+           label = paste0("LS\n", round(ic_sup_m, 4)),
+           vjust = 1.4, hjust = -0.1,
+           color = "#7A4200", size = 3.2, fontface = "bold") +
+  # Caja: sesgo y error estándar bootstrap
+  annotate("label",
+           x = Inf, y = -Inf,
+           label = paste0(
+             "Sesgo:  ", round(bias_m, 4), "\n",
+             "Error est\u00e1ndar:  ", round(se_m, 4)
+           ),
+           hjust = 1.05, vjust = -0.3,
+           size = 3.3, color = "#2C3E50",
+           fill = "#F8F9FA", label.size = 0.35,
+           fontface = "italic") +
+  labs(
+    title    = "Bootstrap \u2014 Desviaci\u00f3n Est\u00e1ndar de Motivaci\u00f3n Acad\u00e9mica",
+    subtitle = paste0(
+      "Bootstrap no param\u00e9trico \u00b7 R = 1\u202f000 r\u00e9plicas \u00b7 IC 95\u202f% (percentil): [",
+      round(ic_inf_m, 4), ", ", round(ic_sup_m, 4), "]"
+    ),
+    x       = "DE bootstrap (motivaci\u00f3n acad\u00e9mica)",
+    y       = "Densidad",
+    caption = paste0(
+      "n = ", length(motiv),
+      "  \u00b7  DE observada: ", round(sd_obs, 4),
+      "  \u00b7  Sesgo: ", round(bias_m, 4),
+      "  \u00b7  Error est\u00e1ndar: ", round(se_m, 4),
+      "\n  \u00b7  Amplitud IC: ", round(ic_sup_m - ic_inf_m, 4),
+      "  \u00b7  Banda naranja = IC 95\u202f%"
+    )
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 15, color = "#1a2a3a", hjust = 0.5),
+    plot.subtitle = element_text(size = 10.5, color = "#5D6D7E", hjust = 0.5,
+                                 margin = margin(b = 8)),
+    plot.caption  = element_text(size = 8.5, color = "#95A5A6", hjust = 0),
+    axis.text     = element_text(color = "#2C3E50"),
+    plot.margin   = margin(18, 20, 14, 18)
+  )
+
+print(p_motiv)
+
+# 7. Exportar en PNG de alta resolución (300 dpi)
+ggsave(
+  filename = "bootstrap_sd_motivacion_academica.png",
+  plot     = p_motiv,
+  width    = 10,
+  height   = 6,
+  dpi      = 300,
+  bg       = "white"
+)
+```
+
+```{r heterogeneidad-paises, message=FALSE, warning=FALSE, fig.width=18, fig.height=13}
+# ══════════════════════════════════════════════════════════════════════════════
+# HETEROGENEIDAD GEOGRÁFICA DEL DATASET — Curva de Lorenz + Lollipop
+# Métricas: Índice de Gini · HHI · Número efectivo de países · CR5
+# ══════════════════════════════════════════════════════════════════════════════
+
+library(tidyverse)
+library(scales)
+library(patchwork)
+
+# ── 1. Tabla de frecuencias por país ─────────────────────────────────────────
+freq_pais <- datos |>
+  count(country, name = "n") |>
+  arrange(desc(n)) |>
+  mutate(
+    pct     = n / sum(n),
+    country = fct_reorder(country, n)
+  )
+
+n_total  <- sum(freq_pais$n)
+n_paises <- nrow(freq_pais)
+n_igual  <- n_total / n_paises  # Frecuencia esperada bajo homogeneidad perfecta
+
+# ── 2. Métricas de concentración ─────────────────────────────────────────────
+# Curva de Lorenz: países ordenados de menor a mayor representación
+p_sorted <- sort(freq_pais$pct)
+lorenz_y <- c(0, cumsum(p_sorted))          # Fracción acumulada de individuos
+lorenz_x <- (0:length(p_sorted)) / length(p_sorted)  # Fracción acumulada de países
+lorenz_df <- data.frame(x = lorenz_x, y = lorenz_y)
+
+# Índice de Gini (regla trapezoidal sobre la curva de Lorenz)
+auc_lorenz <- sum(diff(lorenz_x) * (head(lorenz_y, -1) + tail(lorenz_y, -1)) / 2)
+gini    <- round(1 - 2 * auc_lorenz, 4)
+
+# Herfindahl-Hirschman Index y derivados
+hhi     <- round(sum(freq_pais$pct^2), 4)
+n_efect <- round(1 / hhi, 1)
+
+# CR5: proporción acumulada de los 5 países más representados
+cr5 <- round(sum(tail(sort(freq_pais$pct), 5)), 4)
+
+# ── 3. Panel izquierdo: Curva de Lorenz ──────────────────────────────────────
+p_lorenz <- ggplot(lorenz_df, aes(x = x, y = y)) +
+  # Área de desigualdad (entre línea de igualdad y curva real)
+  geom_ribbon(aes(ymin = x, ymax = y), fill = "#E74C3C", alpha = 0.18) +
+  # Línea de perfecta homogeneidad (diagonal)
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "#2DC653", linewidth = 0.85) +
+  # Curva de Lorenz
+  geom_line(color = "#1a2a3a", linewidth = 1.3) +
+  # Bloque de métricas analíticas (esquina superior izquierda)
+  annotate("label",
+           x = 0.02, y = 0.76,
+           label = paste0(
+             "Gini       = ", gini,   "\n",
+             "HHI        = ", hhi,    "\n",
+             "N efectivo = ", n_efect, "\n",
+             "CR5        = ", percent(cr5, accuracy = 0.1)
+           ),
+           size = 3.2, hjust = 0, vjust = 1, color = "#1a2a3a",
+           fill = "#FAFAFA", label.size = 0.35,
+           lineheight = 1.6, family = "mono") +
+  scale_x_continuous(labels = percent_format(accuracy = 1),
+                     breaks = seq(0, 1, 0.25)) +
+  scale_y_continuous(labels = percent_format(accuracy = 1),
+                     breaks = seq(0, 1, 0.25)) +
+  labs(
+    title    = "Curva de Lorenz",
+    subtitle = "Concentración de individuos por país",
+    x        = "Fracción acumulada de países",
+    y        = "Fracción acumulada de individuos"
+  ) +
+  coord_fixed() +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 13, color = "#1a2a3a"),
+    plot.subtitle = element_text(size = 9.5, color = "#5D6D7E", margin = margin(b = 8)),
+    axis.text     = element_text(color = "#2C3E50"),
+    plot.margin   = margin(12, 20, 10, 12)
+  )
+
+# ── 4. Panel derecho: Lollipop de países ─────────────────────────────────────
+p_lollipop <- ggplot(freq_pais, aes(x = country, y = n)) +
+  # Línea de referencia: distribución homogénea esperada
+  geom_hline(yintercept = n_igual,
+             linetype = "dashed", color = "#2DC653",
+             linewidth = 0.75, alpha = 0.9) +
+  # Palillo del lollipop, coloreado por sobre/sub-representación
+  geom_segment(
+    aes(x = country, xend = country, y = 0, yend = n,
+        color = n >= n_igual),
+    linewidth = 0.65
+  ) +
+  # Cabeza del lollipop
+  geom_point(aes(color = n >= n_igual), size = 2.4) +
+  # Etiqueta de la línea homogénea
+  annotate("text",
+           x    = 1,
+           y    = n_igual * 1.06,
+           label = paste0("Homogéneo ≈ ", round(n_igual)),
+           size = 2.8, hjust = 0, color = "#1B7A34", fontface = "italic") +
+  scale_color_manual(
+    values = c("TRUE" = "#2980B9", "FALSE" = "#C0392B"),
+    labels = c(
+      "TRUE"  = paste0("Sobre-repr. (≥ ", round(n_igual), ")"),
+      "FALSE" = paste0("Sub-repr. (< ",   round(n_igual), ")")
+    ),
+    name = NULL
+  ) +
+  scale_y_continuous(labels = label_comma(),
+                     expand = expansion(mult = c(0, 0.08))) +
+  coord_flip() +
+  labs(
+    title    = "Frecuencia de Individuos por País",
+    subtitle = "Ordenado ascendentemente · Verde = referencia homogénea",
+    x        = NULL,
+    y        = "N.° de individuos"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title         = element_text(face = "bold", size = 13, color = "#1a2a3a"),
+    plot.subtitle      = element_text(size = 9.5, color = "#5D6D7E", margin = margin(b = 8)),
+    axis.text.y        = element_text(color = "#2C3E50", size = 7.5),
+    axis.text.x        = element_text(color = "#2C3E50", size = 9),
+    legend.position    = "bottom",
+    legend.text        = element_text(size = 9),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.y = element_blank(),
+    plot.margin        = margin(12, 20, 10, 12)
+  )
+
+# ── 5. Composición final con patchwork ───────────────────────────────────────
+p_lollipop + p_lorenz +
+  plot_layout(widths = c(2.2, 1)) +
+  plot_annotation(
+    title    = "Heterogeneidad en la Representación Geográfica del Dataset",
+    subtitle = paste0(
+      "n total = ", format(n_total, big.mark = ","),
+      "  \u00b7  Pa\u00edses \u00fanicos = ", n_paises,
+      "  \u00b7  Gini = ", gini,
+      "  \u00b7  HHI = ", hhi,
+      "  \u00b7  N efectivo = ", n_efect,
+      "  \u00b7  CR5 = ", percent(cr5, accuracy = 0.1)
+    ),
+    caption  = paste0(
+      "Gini: desigualdad en la proporci\u00f3n de individuos por pa\u00eds ",
+      "(0 = homog\u00e9neo, 1 = concentraci\u00f3n total)\n",
+      "HHI: \u00edndice Herfindahl-Hirschman  \u00b7  ",
+      "N efectivo = 1/HHI: n\u00famero de pa\u00edses equivalentes bajo igualdad de pesos  \u00b7  ",
+      "CR5: participaci\u00f3n acumulada de los 5 pa\u00edses m\u00e1s representados"
+    ),
+    theme = theme(
+      plot.title    = element_text(face = "bold", size = 16, color = "#1a2a3a", hjust = 0.5),
+      plot.subtitle = element_text(size = 10.5, color = "#5D6D7E", hjust = 0.5,
+                                   margin = margin(b = 10)),
+      plot.caption  = element_text(size = 8.5, color = "#95A5A6", hjust = 0, lineheight = 1.3)
+    )
+  )
+```
