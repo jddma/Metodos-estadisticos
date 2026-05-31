@@ -1,0 +1,161 @@
+---
+title: "Proyecto-2"
+output: html_document
+date: "2026-05-30"
+---
+
+```{r librerias, message=FALSE, warning=FALSE}
+library(readr)
+library(dplyr)
+library(lubridate)
+library(ggcorrplot)
+```
+
+```{r carga, message=FALSE, warning=FALSE}
+# Cargar el dataset desde la ruta especificada
+weather_raw <- read_csv("data/weatherHistory.csv")
+```
+
+```{r correlacion, message=FALSE, warning=FALSE}
+# Transformar variable categórica: "null" → NA, rain = 0, snow = 1
+# Extraer hora del día y aplicar codificación circular (sin/cos) para respetar
+# la naturaleza periódica de la variable (0 h y 23 h son adyacentes)
+weather_raw <- weather_raw |>
+  mutate(
+    precip_type = case_when(
+      `Precip Type` == "rain" ~ 0L,
+      `Precip Type` == "snow" ~ 1L,
+      TRUE                    ~ NA_integer_   # "null" y cualquier otro valor
+    ),
+    hora        = hour(parse_date_time(`Formatted Date`, orders = "ymd HMS z")),
+    hora_sin    = sin(2 * pi * hora / 24),   # Componente seno del ciclo diurno
+    hora_cos    = cos(2 * pi * hora / 24)    # Componente coseno del ciclo diurno
+  )
+
+# Seleccionar únicamente las variables de interés para el análisis
+vars_modelo <- weather_raw |>
+  select(
+    `Apparent Temperature (C)`,  # Variable dependiente (Y)
+    `Temperature (C)`,           # Variable independiente
+    Humidity,                    # Variable independiente
+    `Wind Speed (km/h)`,         # Variable independiente
+    `Visibility (km)`,           # Variable independiente
+    `Pressure (millibars)`,      # Variable independiente
+    precip_type,                 # Variable categórica codificada (rain=0, snow=1)
+    hora_sin,                    # Componente seno de la hora (ciclo diurno)
+    hora_cos                     # Componente coseno de la hora (ciclo diurno)
+  )
+
+# Eliminar filas con valores ausentes (listwise deletion)
+vars_modelo <- na.omit(vars_modelo)
+
+# Calcular la matriz de correlación de Pearson
+matriz_cor <- cor(vars_modelo, method = "pearson")
+
+# Calcular p-valores para la significancia estadística
+p_valores <- cor_pmat(vars_modelo)
+
+# Generar el diagrama de correlación con ggcorrplot
+ggcorrplot(
+  matriz_cor,
+  method        = "square",        # Celdas cuadradas
+  type          = "lower",         # Mostrar solo triángulo inferior
+  lab           = TRUE,            # Mostrar coeficientes dentro de las celdas
+  lab_size      = 3.5,             # Tamaño de los coeficientes
+  p.mat         = p_valores,       # Marcar correlaciones no significativas con X
+  sig.level     = 0.05,            # Umbral de significancia α = 0.05
+  colors        = c("#D73027", "white", "#1A9850"),  # Escala divergente: rojo–blanco–verde
+  outline.color = "gray85",
+  title         = "Matriz de Correlación de Pearson\n(Variables del modelo)",
+  ggtheme       = theme_minimal(base_size = 12)
+)
+```
+
+```{r carga_flood, message=FALSE, warning=FALSE}
+# Cargar únicamente train.csv (test.csv no contiene FloodProbability)
+df_flood <- read_csv("data/flood/train.csv") |>
+  select(
+    FloodProbability,            # Variable dependiente (Y)
+    MonsoonIntensity,            # Variable independiente
+    TopographyDrainage,          # Variable independiente
+    RiverManagement,             # Variable independiente
+    Deforestation,               # Variable independiente
+    Urbanization,                # Variable independiente
+    WetlandLoss,                 # Variable independiente
+    DeterioratingInfrastructure, # Variable independiente (proxy: InfrastructuralObstacles)
+    PoliticalFactors             # Variable independiente
+  ) |>
+  na.omit()                      # Eliminación listwise de filas con NA
+```
+
+```{r correlacion_flood, message=FALSE, warning=FALSE}
+# Calcular la matriz de correlación de Spearman
+# (apropiada para variables ordinales en escala 0-9 y variable dependiente continua)
+matriz_cor_flood <- cor(df_flood, method = "spearman")
+
+# Calcular p-valores de significancia estadística
+p_valores_flood <- cor_pmat(df_flood, method = "spearman")
+
+# Generar el diagrama de correlación
+ggcorrplot(
+  matriz_cor_flood,
+  method        = "square",
+  type          = "lower",
+  lab           = TRUE,
+  lab_size      = 3.2,
+  p.mat         = p_valores_flood,
+  sig.level     = 0.05,           # Correlaciones no significativas se marcan con X
+  colors        = c("#D73027", "white", "#1A9850"),
+  outline.color = "gray85",
+  title         = "Matriz de Correlación de Spearman — Flood Dataset",
+  ggtheme       = theme_minimal(base_size = 12)
+) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r carga_student, message=FALSE, warning=FALSE}
+# Cargar el dataset completo de rendimiento estudiantil
+df_student <- read.csv("data/Student_Performance.csv")
+
+# Codificar variable categórica binaria: Yes = 1, No = 0
+df_student$Extracurricular.Activities <- ifelse(
+  df_student$Extracurricular.Activities == "Yes", 1L, 0L
+)
+
+# Seleccionar todas las variables del modelo
+vars_student <- df_student[, c(
+  "Hours.Studied",                    # Horas de estudio diarias
+  "Previous.Scores",                  # Calificaciones históricas promedio
+  "Extracurricular.Activities",       # Actividades extracurriculares (1=Sí, 0=No)
+  "Sleep.Hours",                      # Horas de sueño por noche
+  "Sample.Question.Papers.Practiced", # Exámenes de simulación completados
+  "Performance.Index"                 # Variable dependiente (Y)
+)]
+```
+
+```{r correlacion_student, message=FALSE, warning=FALSE}
+# Calcular la matriz de correlación de Spearman
+# (apropiado: varias variables son enteros en rangos discretos cortos,
+#  lo que hace improbable la normalidad necesaria para Pearson)
+matriz_cor_student <- cor(vars_student, method = "spearman")
+
+# Calcular p-valores de significancia estadística
+p_valores_student <- cor_pmat(vars_student, method = "spearman")
+
+# Generar el diagrama de correlación
+ggcorrplot(
+  matriz_cor_student,
+  method        = "square",
+  type          = "lower",
+  lab           = TRUE,
+  lab_size      = 3.5,
+  p.mat         = p_valores_student,
+  sig.level     = 0.05,             # Correlaciones no significativas marcadas con X
+  colors        = c("#D73027", "white", "#1A9850"),
+  outline.color = "gray85",
+  title         = "Matriz de Correlación de Spearman — Student Performance",
+  ggtheme       = theme_minimal(base_size = 12)
+) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
