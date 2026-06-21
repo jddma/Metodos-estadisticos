@@ -1,0 +1,412 @@
+---
+title: "Dashboard de Supuestos de Regresión"
+subtitle: "Dataset: flood/train.csv | Variable objetivo: FloodProbability"
+author: ""
+date: "`r format(Sys.Date(), '%d de %B de %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 2
+    theme: flatly
+    highlight: tango
+    number_sections: true
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+---
+
+# 1. Configuración e Imports
+
+```{r imports}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(car)        # vif, durbinWatsonTest
+  library(MASS)       # rlm — soporte robusto
+  library(lmtest)     # bptest — Breusch-Pagan
+  library(patchwork)  # composición de gráficos
+})
+```
+
+---
+
+# 2. Carga y Preparación de Datos
+
+```{r load-data}
+# Dataset: data/flood/train.csv
+# Variable dependiente : flood_prob (FloodProbability)
+# Predictores          : monsoon_intensity, topography_drainage, river_management,
+#                        deforestation, urbanization, wetland_loss,
+#                        deteriorating_infra, political_factors
+
+df_raw <- read_csv("data/flood/train.csv", show_col_types = FALSE)
+
+df <- df_raw %>%
+  rename(
+    flood_prob          = FloodProbability,
+    monsoon_intensity   = MonsoonIntensity,
+    topography_drainage = TopographyDrainage,
+    river_management    = RiverManagement,
+    deforestation       = Deforestation,
+    urbanization        = Urbanization,
+    wetland_loss        = WetlandLoss,
+    deteriorating_infra = DeterioratingInfrastructure,
+    political_factors   = PoliticalFactors
+  ) %>%
+  dplyr::select(
+    flood_prob, monsoon_intensity, topography_drainage, river_management,
+    deforestation, urbanization, wetland_loss, deteriorating_infra,
+    political_factors
+  ) %>%
+  drop_na()
+
+stopifnot(nrow(df) > 100)
+glimpse(df)
+```
+
+```{r fit-model, include=FALSE}
+modelo <- lm(
+  flood_prob ~ monsoon_intensity + topography_drainage + river_management +
+               deforestation + urbanization + wetland_loss +
+               deteriorating_infra + political_factors,
+  data = df
+)
+```
+
+---
+
+# 3. Correlograma y VIF
+
+```{r plot-multicolinealidad, fig.width=13, fig.height=6}
+# ── Correlograma ──────────────────────────────────────────────────────────────
+num_vars <- df %>%
+  dplyr::select(
+    flood_prob, monsoon_intensity, topography_drainage, river_management,
+    deforestation, urbanization, wetland_loss, deteriorating_infra,
+    political_factors
+  )
+
+cor_mat <- cor(num_vars, use = "complete.obs")
+var_ord <- colnames(cor_mat)
+
+cor_long <- as.data.frame(cor_mat) %>%
+  rownames_to_column("var1") %>%
+  pivot_longer(-var1, names_to = "var2", values_to = "corr") %>%
+  mutate(
+    var1 = factor(var1, levels = var_ord),
+    var2 = factor(var2, levels = rev(var_ord))
+  )
+
+p_corr <- ggplot(cor_long, aes(x = var1, y = var2, fill = corr)) +
+  geom_tile(colour = "white", linewidth = 0.5) +
+  geom_text(aes(label = sprintf("%.2f", corr)), size = 2.5, colour = "grey10") +
+  scale_fill_gradient2(
+    low = "#2166ac", mid = "white", high = "#d6604d",
+    midpoint = 0, limits = c(-1, 1), name = "r"
+  ) +
+  labs(
+    title    = "Mapa de Calor de Correlación",
+    subtitle = "Predictores numéricos — FloodProbability como referencia",
+    x = NULL, y = NULL
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x     = element_text(angle = 35, hjust = 1),
+    plot.title      = element_text(face = "bold", size = 13),
+    plot.subtitle   = element_text(colour = "grey40", size = 10),
+    legend.position = "right"
+  )
+
+# ── VIF ───────────────────────────────────────────────────────────────────────
+vif_raw <- vif(modelo)
+
+if (is.matrix(vif_raw)) {
+  # car devuelve GVIF | Df | GVIF^(1/(2*Df)) para variables categóricas
+  vif_df <- data.frame(
+    variable = rownames(vif_raw),
+    VIF      = vif_raw[, 3]^2   # (GVIF^(1/(2*Df)))^2 → comparable a VIF clásico
+  )
+} else {
+  vif_df <- data.frame(variable = names(vif_raw), VIF = as.numeric(vif_raw))
+}
+
+p_vif <- ggplot(vif_df, aes(x = reorder(variable, VIF), y = VIF, fill = VIF)) +
+  geom_col(show.legend = FALSE, width = 0.65) +
+  geom_hline(yintercept = 5,  linetype = "dashed", colour = "#f4a582", linewidth = 0.9) +
+  geom_hline(yintercept = 10, linetype = "dotted", colour = "#d6604d", linewidth = 0.9) +
+  geom_text(aes(label = round(VIF, 2)), hjust = -0.15, size = 3.5) +
+  scale_fill_gradient(low = "#74add1", high = "#d73027") +
+  coord_flip(ylim = c(0, max(vif_df$VIF) * 1.25)) +
+  labs(
+    title    = "Factor de Inflación de la Varianza (VIF)",
+    subtitle = "Umbral moderado = 5  |  Umbral crítico = 10",
+    x = NULL, y = "VIF"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 13),
+    plot.subtitle = element_text(colour = "grey40", size = 10)
+  )
+
+p_corr | p_vif
+```
+
+---
+
+# 4. Residuos Parciales (Linealidad)
+
+```{r plot-residuos-parciales, fig.width=14, fig.height=10}
+numeric_preds <- c(
+  "monsoon_intensity", "topography_drainage", "river_management",
+  "deforestation", "urbanization", "wetland_loss",
+  "deteriorating_infra", "political_factors"
+)
+
+# LOESS es O(n²): con ~1.1 M filas es inviable sobre el dataset completo.
+# Un subconjunto aleatorio de 5 000 obs. es suficiente para diagnóstico visual.
+set.seed(42)
+n_plot   <- 5000L
+idx_plot <- sample.int(nrow(df), min(n_plot, nrow(df)))
+df_plot  <- df[idx_plot, ]
+res_plot <- residuals(modelo)[idx_plot]
+
+partial_plots <- map(numeric_preds, function(var) {
+  beta_j    <- coef(modelo)[var]
+  partial_r <- res_plot + beta_j * df_plot[[var]]
+  ggplot(data.frame(x = df_plot[[var]], y = partial_r), aes(x = x, y = y)) +
+    geom_point(alpha = 0.10, colour = "#4393c3", size = 0.6) +
+    geom_smooth(method = "loess", se = TRUE, colour = "#d6604d",
+                fill = "#f4a582", linewidth = 1, span = 0.6,
+                method.args = list(degree = 1), n = 150) +
+    geom_smooth(method = "lm", se = FALSE, colour = "#252525",
+                linetype = "dashed", linewidth = 0.7) +
+    labs(title = var, x = var, y = "Residuo parcial") +
+    theme_minimal(base_size = 10) +
+    theme(plot.title = element_text(face = "bold", size = 10))
+})
+
+wrap_plots(partial_plots, ncol = 4) +
+  plot_annotation(
+    title    = "Gráficos de Residuos Parciales — Diagnóstico de Linealidad",
+    subtitle = "Línea roja = LOESS  |  Línea negra discontinua = relación lineal simple",
+    theme    = theme(
+      plot.title    = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(colour = "grey40", size = 11)
+    )
+  )
+```
+
+---
+
+# 5. Residuos vs. Ajustados (Homocedasticidad)
+
+```{r plot-homocedasticidad, fig.width=9, fig.height=6}
+# Subsample (1.1 M filas + LOESS → inviable); idx_plot definido en sección 4
+hom_df <- data.frame(
+  fitted  = fitted(modelo)[idx_plot],
+  studres = rstudent(modelo)[idx_plot]
+)
+
+ggplot(hom_df, aes(x = fitted, y = studres)) +
+  geom_point(alpha = 0.18, colour = "#4393c3", size = 0.9) +
+  geom_hline(yintercept =  0, colour = "#252525", linewidth = 0.8) +
+  geom_hline(yintercept =  2, colour = "#d6604d", linetype = "dashed", linewidth = 0.7) +
+  geom_hline(yintercept = -2, colour = "#d6604d", linetype = "dashed", linewidth = 0.7) +
+  geom_smooth(method = "loess", se = TRUE, colour = "#b2182b",
+              fill = "#f4a582", linewidth = 1.1, alpha = 0.3, span = 0.6,
+              method.args = list(degree = 1), n = 150) +
+  scale_x_continuous(labels = scales::comma) +
+  labs(
+    title    = "Residuos Estudentizados vs. Valores Ajustados",
+    subtitle = "Diagnóstico de homocedasticidad  |  Umbrales de outlier: ±2",
+    x = "Valores Ajustados",
+    y = "Residuos Estudentizados"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(colour = "grey40", size = 11)
+  )
+```
+
+---
+
+# 6. Q-Q Plot Avanzado (Normalidad)
+
+```{r plot-qqplot, fig.width=8, fig.height=7}
+# Subsample para Q-Q visual; idx_plot definido en sección 4
+std_res <- sort(rstudent(modelo)[idx_plot])
+n       <- length(std_res)
+probs   <- ppoints(n)
+
+qq_df <- data.frame(
+  theoretical = qnorm(probs),
+  sample      = std_res
+)
+
+# Bandas de confianza puntual al 95% (método de la envolvente normal)
+se_band        <- (1 / dnorm(qq_df$theoretical)) * sqrt(probs * (1 - probs) / n)
+qq_df$upper_95 <- qq_df$theoretical + 1.96 * se_band
+qq_df$lower_95 <- qq_df$theoretical - 1.96 * se_band
+
+ggplot(qq_df, aes(x = theoretical, y = sample)) +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95),
+              fill = "#92c5de", alpha = 0.4) +
+  geom_abline(slope = 1, intercept = 0,
+              colour = "#d6604d", linewidth = 1, linetype = "dashed") +
+  geom_point(alpha = 0.22, colour = "#2166ac", size = 1.1) +
+  labs(
+    title    = "Q-Q Plot Avanzado de Residuos Estudentizados",
+    subtitle = "Banda de confianza al 95%  |  Desviaciones en las colas indican no-normalidad",
+    x = "Cuantiles Teóricos (Distribución Normal)",
+    y = "Cuantiles Observados (Residuos Estudentizados)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(colour = "grey40", size = 11)
+  )
+```
+
+---
+
+# 7. Gráfico de Influencia (Outliers y Apalancamiento)
+
+```{r plot-influencia, fig.width=11, fig.height=7}
+n_obs  <- nrow(df)
+p_pred <- length(coef(modelo)) - 1   # número de coeficientes excluido el intercepto
+
+lev_thresh <- 2 * (p_pred + 1) / n_obs  # umbral de apalancamiento estándar
+out_thresh <- 2                           # umbral de residuo estudentizado
+
+# Calcular diagnósticos sobre el dataset completo (fórmulas analíticas, rápidas)
+inf_full <- data.frame(
+  hat     = hatvalues(modelo),
+  studres = rstudent(modelo),
+  cooks   = cooks.distance(modelo)
+) %>%
+  mutate(
+    categoria = case_when(
+      hat > lev_thresh & abs(studres) > out_thresh ~ "Alto apalancamiento + Outlier",
+      hat > lev_thresh                             ~ "Alto apalancamiento",
+      abs(studres) > out_thresh                    ~ "Outlier",
+      TRUE                                         ~ "Normal"
+    ),
+    categoria = factor(categoria, levels = c(
+      "Normal", "Alto apalancamiento", "Outlier",
+      "Alto apalancamiento + Outlier"
+    ))
+  )
+
+# Conservar TODOS los puntos notables; subsamplear los normales para el gráfico
+set.seed(42)
+idx_normal <- which(inf_full$categoria == "Normal")
+idx_keep   <- sample(idx_normal, min(4000L, length(idx_normal)))
+inf_df     <- rbind(inf_full[inf_full$categoria != "Normal", ],
+                    inf_full[idx_keep, ])
+
+colour_map <- c(
+  "Normal"                        = "#bbbbbb",
+  "Alto apalancamiento"           = "#4393c3",
+  "Outlier"                       = "#f4a582",
+  "Alto apalancamiento + Outlier" = "#d6604d"
+)
+
+ggplot(inf_df, aes(x = hat, y = studres,
+                   size = cooks, colour = categoria)) +
+  geom_vline(xintercept = lev_thresh, linetype = "dashed",
+             colour = "#4393c3", linewidth = 0.8) +
+  geom_hline(yintercept =  out_thresh, linetype = "dashed",
+             colour = "#d6604d", linewidth = 0.8) +
+  geom_hline(yintercept = -out_thresh, linetype = "dashed",
+             colour = "#d6604d", linewidth = 0.8) +
+  geom_hline(yintercept = 0, colour = "#252525", linewidth = 0.6) +
+  geom_point(alpha = 0.45) +
+  scale_size_continuous(
+    name   = "Dist. de Cook",
+    range  = c(0.4, 9),
+    breaks = c(0.001, 0.01, 0.05)
+  ) +
+  scale_colour_manual(name = "Clasificación", values = colour_map) +
+  labs(
+    title    = "Diagnóstico de Influencia: Apalancamiento vs. Residuos",
+    subtitle = sprintf(
+      "Umbral leverage = %.4f  |  Umbral |residuo| = %.0f  |  Área del punto ∝ Distancia de Cook",
+      lev_thresh, out_thresh
+    ),
+    x = "Hat Values (Apalancamiento)",
+    y = "Residuos Estudentizados"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 14),
+    plot.subtitle   = element_text(colour = "grey40", size = 10),
+    legend.position = "right"
+  )
+```
+
+---
+
+# 8. Tests Estadísticos Formales
+
+```{r tests-formales}
+cat("══════════════════════════════════════════════════════\n")
+cat("  TESTS FORMALES DE SUPUESTOS DE REGRESIÓN\n")
+cat("══════════════════════════════════════════════════════\n\n")
+
+# ── 1. Normalidad: Shapiro-Wilk (muestra de hasta 5000 obs.) ──────────────────
+set.seed(42)
+res_vec    <- residuals(modelo)
+n_sw       <- min(length(res_vec), 5000)
+sw_muestra <- sample(res_vec, n_sw)
+sw_test    <- shapiro.test(sw_muestra)
+
+cat(sprintf(
+  "1. Shapiro-Wilk (n = %d)\n   W = %.5f  |  p-valor = %.4e\n   %s\n\n",
+  n_sw, sw_test$statistic, sw_test$p.value,
+  ifelse(sw_test$p.value < 0.05,
+         "→ Se rechaza H0: residuos NO siguen distribución normal (p < 0.05)",
+         "→ No se rechaza H0: residuos consistentes con normalidad (p ≥ 0.05)")
+))
+
+# ── 2. Homocedasticidad: Breusch-Pagan ────────────────────────────────────────
+bp_test <- bptest(modelo)
+
+cat(sprintf(
+  "2. Breusch-Pagan\n   BP = %.4f  |  df = %d  |  p-valor = %.4e\n   %s\n\n",
+  bp_test$statistic, bp_test$parameter, bp_test$p.value,
+  ifelse(bp_test$p.value < 0.05,
+         "→ Se rechaza H0: evidencia de heterocedasticidad (p < 0.05)",
+         "→ No se rechaza H0: varianza constante en los residuos (p ≥ 0.05)")
+))
+
+# ── 3. Autocorrelación: Durbin-Watson ─────────────────────────────────────────
+# simulate = FALSE: aproximación normal en lugar de Monte Carlo (1000 perms × 1.1M obs)
+dw_test <- durbinWatsonTest(modelo, simulate = FALSE)
+
+cat(sprintf(
+  "3. Durbin-Watson\n   DW = %.4f  |  p-valor = %.4f\n   %s\n\n",
+  dw_test$dw, dw_test$p,
+  ifelse(dw_test$p < 0.05,
+         "→ Se rechaza H0: indicios de autocorrelación en los residuos (p < 0.05)",
+         "→ No se rechaza H0: no se detecta autocorrelación significativa (p ≥ 0.05)")
+))
+
+# ── 4. Multicolinealidad: VIF (resumen tabular) ────────────────────────────────
+cat("4. Factor de Inflación de la Varianza (VIF)\n")
+print(vif_df)
+cat(sprintf(
+  "\n   Máximo VIF = %.2f  |  %s\n",
+  max(vif_df$VIF),
+  ifelse(max(vif_df$VIF) > 10,
+         "→ Multicolinealidad severa detectada (VIF > 10)",
+         ifelse(max(vif_df$VIF) > 5,
+                "→ Multicolinealidad moderada (5 < VIF ≤ 10)",
+                "→ Sin evidencia de multicolinealidad (VIF ≤ 5)"))
+))
+cat("\n══════════════════════════════════════════════════════\n")
+```

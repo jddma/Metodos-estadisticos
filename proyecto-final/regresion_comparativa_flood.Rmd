@@ -1,0 +1,533 @@
+---
+title: "Comparación de 6 Técnicas de Regresión Avanzadas"
+subtitle: "Dataset: flood/train.csv | Variable objetivo: FloodProbability"
+author: ""
+date: "`r format(Sys.Date(), '%d de %B de %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 2
+    theme: flatly
+    highlight: tango
+    number_sections: true
+    df_print: kable
+---
+
+---
+
+# 1. Configuración e Imports
+
+```{r imports}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(caret)
+  library(MASS)       # rlm  — Regresión M-Robusta
+  library(quantreg)   # rq   — LAD / Cuántica
+  library(mgcv)       # gam  — GAM No Paramétrico
+  library(glmnet)     # cv.glmnet — Ridge
+  library(rstanarm)   # stan_glm  — Bayesiana
+  library(knitr)      # kable — tabla comparativa
+})
+
+options(mc.cores = min(2L, parallel::detectCores()))
+```
+
+---
+
+# 2. Preparación de Datos
+
+```{r preparacion-datos}
+datos_raw <- read_csv("data/flood/train.csv", show_col_types = FALSE)
+
+# Renombrar columnas al esquema de trabajo
+datos_raw <- datos_raw %>%
+  rename(
+    flood_prob          = FloodProbability,
+    monsoon_intensity   = MonsoonIntensity,
+    topography_drainage = TopographyDrainage,
+    river_management    = RiverManagement,
+    deforestation       = Deforestation,
+    urbanization        = Urbanization,
+    climate_change      = ClimateChange,
+    dams_quality        = DamsQuality,
+    siltation           = Siltation,
+    agri_practices      = AgriculturalPractices,
+    encroachments       = Encroachments,
+    ineffective_prep    = IneffectiveDisasterPreparedness,
+    drainage_systems    = DrainageSystems,
+    coastal_vuln        = CoastalVulnerability,
+    landslides          = Landslides,
+    watersheds          = Watersheds,
+    deteriorating_infra = DeterioratingInfrastructure,
+    population_score    = PopulationScore,
+    wetland_loss        = WetlandLoss,
+    inadequate_planning = InadequatePlanning,
+    political_factors   = PoliticalFactors
+  )
+
+# Seleccionar variables del modelo y eliminar filas con NA
+vars_modelo <- datos_raw %>%
+  transmute(
+    y                   = flood_prob,
+    monsoon_intensity   = monsoon_intensity,
+    topography_drainage = topography_drainage,
+    river_management    = river_management,
+    deforestation       = deforestation,
+    urbanization        = urbanization,
+    climate_change      = climate_change,
+    dams_quality        = dams_quality,
+    siltation           = siltation,
+    agri_practices      = agri_practices,
+    encroachments       = encroachments,
+    ineffective_prep    = ineffective_prep,
+    drainage_systems    = drainage_systems,
+    coastal_vuln        = coastal_vuln,
+    landslides          = landslides,
+    watersheds          = watersheds,
+    deteriorating_infra = deteriorating_infra,
+    population_score    = population_score,
+    wetland_loss        = wetland_loss,
+    inadequate_planning = inadequate_planning,
+    political_factors   = political_factors
+  ) %>%
+  drop_na()
+
+cat(sprintf("Observaciones disponibles tras drop_na: %d\n", nrow(vars_modelo)))
+
+# División estratificada 80/20 con semilla fija
+set.seed(42)
+idx_train <- createDataPartition(vars_modelo$y, p = 0.80, list = FALSE)
+train_raw <- vars_modelo[ idx_train, ]
+test_raw  <- vars_modelo[-idx_train, ]
+
+cat(sprintf("Entrenamiento: %d obs. | Prueba: %d obs.\n",
+            nrow(train_raw), nrow(test_raw)))
+```
+
+```{r escalado}
+# Centrado y escalado Z-score — ajustado SOLO con entrenamiento, aplicado a ambos
+vars_cont <- c(
+  "monsoon_intensity", "topography_drainage", "river_management",
+  "deforestation", "urbanization", "climate_change",
+  "dams_quality", "siltation", "agri_practices",
+  "encroachments", "ineffective_prep", "drainage_systems",
+  "coastal_vuln", "landslides", "watersheds",
+  "deteriorating_infra", "population_score", "wetland_loss",
+  "inadequate_planning", "political_factors"
+)
+
+preproc   <- preProcess(train_raw[, vars_cont], method = c("center", "scale"))
+
+train_scaled              <- train_raw
+test_scaled               <- test_raw
+train_scaled[, vars_cont] <- predict(preproc, train_raw[, vars_cont])
+test_scaled[, vars_cont]  <- predict(preproc, test_raw[, vars_cont])
+
+y_train <- train_scaled$y
+y_test  <- test_scaled$y
+
+# Fórmula base compartida
+formula_base <- y ~ monsoon_intensity + topography_drainage + river_management +
+                    deforestation + urbanization + climate_change +
+                    dams_quality + siltation + agri_practices +
+                    encroachments + ineffective_prep + drainage_systems +
+                    coastal_vuln + landslides + watersheds +
+                    deteriorating_infra + population_score + wetland_loss +
+                    inadequate_planning + political_factors
+
+# Matrices de diseño para glmnet (sin intercepto duplicado)
+X_train_mat <- model.matrix(formula_base, data = train_scaled)[, -1]
+X_test_mat  <- model.matrix(formula_base, data = test_scaled)[, -1]
+
+# ── Subconjunto de entrenamiento para modelos costosos ────────────────────────
+# LAD es O(n²), M-Robusta es IRLS×150, GAM y MCMC escalan O(n) por paso.
+# 100 K observaciones garantizan estimaciones estables con 8 predictores.
+# OLS y Ridge permanecen en el dataset completo (son analíticos/vectorizados).
+set.seed(42)
+n_train_max <- 100000L
+idx_sub     <- sample.int(nrow(train_scaled), min(n_train_max, nrow(train_scaled)))
+train_sub   <- train_scaled[idx_sub, ]
+y_train_sub <- train_sub$y
+```
+
+---
+
+# 3. Entrenamiento de Modelos
+
+## Modelo 1 — OLS (Mínimos Cuadrados Ordinarios)
+
+```{r modelo-ols}
+modelo_ols <- lm(formula_base, data = train_scaled)
+summary(modelo_ols)
+```
+
+## Modelo 2 — LAD / Regresión Cuántica de la Mediana (τ = 0.5)
+
+```{r modelo-lad}
+# method = "pfn" (Frisch-Newton + preproceso): O(n log n) vs O(n²) del default "br"
+# train_sub (100 K obs.) para viabilidad computacional
+modelo_lad <- rq(formula_base, tau = 0.5, data = train_sub, method = "pfn")
+summary(modelo_lad, se = "nid")   # se = "nid": analítico, evita bootstrap
+```
+
+## Modelo 3 — Regresión M-Robusta con pesos Huber
+
+```{r modelo-m-robusto}
+# train_sub (100 K obs.): IRLS con maxit=50 iteraciones en 880 K → varios minutos
+modelo_m <- rlm(formula_base, data = train_sub,
+                method = "M", maxit = 50, scale.est = "MAD")
+summary(modelo_m)
+```
+
+## Modelo 4 — GAM (Regresión No Paramétrica con splines suavizados)
+
+```{r modelo-gam}
+formula_gam <- y ~ s(monsoon_intensity,   k = 5) +
+                   s(topography_drainage, k = 5) +
+                   s(river_management,    k = 5) +
+                   s(deforestation,       k = 5) +
+                   s(urbanization,        k = 5) +
+                   s(climate_change,      k = 5) +
+                   s(dams_quality,        k = 5) +
+                   s(siltation,           k = 5) +
+                   s(agri_practices,      k = 5) +
+                   s(encroachments,       k = 5) +
+                   s(ineffective_prep,    k = 5) +
+                   s(drainage_systems,    k = 5) +
+                   s(coastal_vuln,        k = 5) +
+                   s(landslides,          k = 5) +
+                   s(watersheds,          k = 5) +
+                   s(deteriorating_infra, k = 5) +
+                   s(population_score,    k = 5) +
+                   s(wetland_loss,        k = 5) +
+                   s(inadequate_planning, k = 5) +
+                   s(political_factors,   k = 5)
+
+# bam() es la versión de gam() optimizada para datos grandes:
+# discretiza covariables y usa fREML (REML rápido) → órdenes de magnitud más veloz
+modelo_gam <- bam(formula_gam, data = train_sub, method = "fREML", discrete = TRUE)
+summary(modelo_gam)
+```
+
+## Modelo 5 — Regresión Ridge (λ óptimo por CV-10)
+
+```{r modelo-ridge}
+set.seed(42)
+modelo_ridge <- cv.glmnet(
+  x           = X_train_mat,
+  y           = y_train,
+  alpha       = 0,       # alpha = 0 → Ridge puro
+  nfolds      = 10,
+  standardize = FALSE    # predictores ya escalados manualmente
+)
+
+cat(sprintf("Lambda óptimo (lambda.min): %.6f\n", modelo_ridge$lambda.min))
+plot(modelo_ridge)
+```
+
+## Modelo 6 — Regresión Bayesiana con priors normales (stan_glm)
+
+```{r modelo-bayesiano, results='hide'}
+# train_sub (100 K obs.): MCMC evalúa log-verosimilitud O(n) por paso;
+# 880 K × 2 000 pasos = 1.76 B operaciones → train_sub reduce ~9× el tiempo.
+modelo_bayes <- stan_glm(
+  formula         = formula_base,
+  data            = train_sub,
+  family          = gaussian(),
+  prior           = normal(location = 0, scale = 2.5, autoscale = TRUE),
+  prior_intercept = normal(location = 0, scale = 10),
+  prior_aux       = exponential(rate = 1, autoscale = TRUE),
+  chains          = 2,
+  iter            = 1000,
+  warmup          = 500,
+  cores           = 2,
+  seed            = 42,
+  refresh         = 0    # suprimir output MCMC
+)
+```
+
+```{r resumen-bayesiano}
+print(modelo_bayes, digits = 3)
+```
+
+---
+
+# 4. Evaluación y Predicción en el Conjunto de Prueba
+
+```{r evaluacion}
+# Función auxiliar para métricas de regresión
+calc_metricas <- function(y_real, y_pred, nombre) {
+  res    <- y_real - y_pred
+  rmse   <- sqrt(mean(res^2))
+  mae    <- mean(abs(res))
+  ss_res <- sum(res^2)
+  ss_tot <- sum((y_real - mean(y_real))^2)
+  r2     <- 1 - (ss_res / ss_tot)
+  tibble(Modelo = nombre, RMSE = rmse, MAE = mae, R2 = r2)
+}
+
+# Generar predicciones sobre el conjunto de prueba
+pred_ols   <- as.numeric(predict(modelo_ols,   newdata = test_scaled))
+pred_lad   <- as.numeric(predict(modelo_lad,   newdata = test_scaled))
+pred_m     <- as.numeric(predict(modelo_m,     newdata = test_scaled))
+pred_gam   <- as.numeric(predict(modelo_gam,   newdata = test_scaled,
+                                 type = "response"))
+pred_ridge <- as.numeric(predict(modelo_ridge, newx = X_test_mat,
+                                 s    = "lambda.min"))
+pred_bayes <- colMeans(
+  posterior_epred(modelo_bayes, newdata = test_scaled, seed = 42)
+)
+
+# Consolidar métricas
+metricas <- bind_rows(
+  calc_metricas(y_test, pred_ols,   "OLS"),
+  calc_metricas(y_test, pred_lad,   "LAD (Cuántica τ=0.5)"),
+  calc_metricas(y_test, pred_m,     "M-Robusto (Huber)"),
+  calc_metricas(y_test, pred_gam,   "GAM"),
+  calc_metricas(y_test, pred_ridge, "Ridge"),
+  calc_metricas(y_test, pred_bayes, "Bayesiana")
+)
+```
+
+---
+
+# 5. Métricas Individuales por Modelo
+
+## 5.1 Modelo 1 — OLS
+
+```{r metricas-ols}
+m_ols <- calc_metricas(y_test, pred_ols, "OLS")
+
+cat(sprintf("RMSE : %.4f\nMAE  : %.4f\nR²   : %.4f\n",
+            m_ols$RMSE, m_ols$MAE, m_ols$R2))
+
+# Distribución de residuos
+res_ols <- y_test - pred_ols
+par(mfrow = c(1, 2))
+hist(res_ols, breaks = 50, main = "OLS — Histograma de residuos",
+     xlab = "Residuo", col = "#2C7BB6", border = "white")
+abline(v = 0, col = "red", lwd = 2, lty = 2)
+res_qq_ols <- if (length(res_ols) > 5000L) sample(res_ols, 5000L) else res_ols
+qqnorm(res_qq_ols, main = "OLS — Q-Q Plot de residuos", pch = 20, cex = 0.4)
+qqline(res_qq_ols, col = "red", lwd = 1.5)
+par(mfrow = c(1, 1))
+```
+
+## 5.2 Modelo 2 — LAD (Cuántica τ = 0.5)
+
+```{r metricas-lad}
+m_lad <- calc_metricas(y_test, pred_lad, "LAD (Cuántica τ=0.5)")
+
+cat(sprintf("RMSE : %.4f\nMAE  : %.4f\nR²   : %.4f\n",
+            m_lad$RMSE, m_lad$MAE, m_lad$R2))
+
+res_lad <- y_test - pred_lad
+par(mfrow = c(1, 2))
+hist(res_lad, breaks = 50, main = "LAD — Histograma de residuos",
+     xlab = "Residuo", col = "#4DAC26", border = "white")
+abline(v = 0, col = "red", lwd = 2, lty = 2)
+res_qq_lad <- if (length(res_lad) > 5000L) sample(res_lad, 5000L) else res_lad
+qqnorm(res_qq_lad, main = "LAD — Q-Q Plot de residuos", pch = 20, cex = 0.4)
+qqline(res_qq_lad, col = "red", lwd = 1.5)
+par(mfrow = c(1, 1))
+```
+
+## 5.3 Modelo 3 — M-Robusto (Huber)
+
+```{r metricas-m-robusto}
+m_rob <- calc_metricas(y_test, pred_m, "M-Robusto (Huber)")
+
+cat(sprintf("RMSE : %.4f\nMAE  : %.4f\nR²   : %.4f\n",
+            m_rob$RMSE, m_rob$MAE, m_rob$R2))
+
+res_m <- y_test - pred_m
+par(mfrow = c(1, 2))
+hist(res_m, breaks = 50, main = "M-Robusto — Histograma de residuos",
+     xlab = "Residuo", col = "#D01C8B", border = "white")
+abline(v = 0, col = "red", lwd = 2, lty = 2)
+res_qq_m <- if (length(res_m) > 5000L) sample(res_m, 5000L) else res_m
+qqnorm(res_qq_m, main = "M-Robusto — Q-Q Plot de residuos", pch = 20, cex = 0.4)
+qqline(res_qq_m, col = "red", lwd = 1.5)
+par(mfrow = c(1, 1))
+```
+
+## 5.4 Modelo 4 — GAM
+
+```{r metricas-gam}
+m_gam <- calc_metricas(y_test, pred_gam, "GAM")
+
+cat(sprintf("RMSE : %.4f\nMAE  : %.4f\nR²   : %.4f\n",
+            m_gam$RMSE, m_gam$MAE, m_gam$R2))
+
+res_gam <- y_test - pred_gam
+par(mfrow = c(1, 2))
+hist(res_gam, breaks = 50, main = "GAM — Histograma de residuos",
+     xlab = "Residuo", col = "#F1A340", border = "white")
+abline(v = 0, col = "red", lwd = 2, lty = 2)
+res_qq_gam <- if (length(res_gam) > 5000L) sample(res_gam, 5000L) else res_gam
+qqnorm(res_qq_gam, main = "GAM — Q-Q Plot de residuos", pch = 20, cex = 0.4)
+qqline(res_qq_gam, col = "red", lwd = 1.5)
+par(mfrow = c(1, 1))
+
+# Gráficos de efectos suavizados (splines)
+plot(modelo_gam, pages = 1, shade = TRUE, shade.col = "lightblue",
+     seWithMean = TRUE, shift = coef(modelo_gam)[1],
+     main = "GAM — Efectos parciales estimados")
+```
+
+## 5.5 Modelo 5 — Ridge
+
+```{r metricas-ridge}
+m_ridge <- calc_metricas(y_test, pred_ridge, "Ridge")
+
+cat(sprintf("RMSE        : %.4f\nMAE         : %.4f\nR²          : %.4f\nLambda min  : %.6f\n",
+            m_ridge$RMSE, m_ridge$MAE, m_ridge$R2, modelo_ridge$lambda.min))
+
+# Coeficientes en el lambda óptimo
+coef_ridge <- as.matrix(coef(modelo_ridge, s = "lambda.min"))
+coef_df    <- tibble(
+  Variable    = rownames(coef_ridge),
+  Coeficiente = as.numeric(coef_ridge)
+) %>% filter(Variable != "(Intercept)") %>% arrange(desc(abs(Coeficiente)))
+
+kable(coef_df, digits = 4,
+      caption = "Ridge — Coeficientes en λ óptimo (ordenados por |coef|)")
+```
+
+## 5.6 Modelo 6 — Regresión Bayesiana
+
+```{r metricas-bayesiana}
+m_bayes <- calc_metricas(y_test, pred_bayes, "Bayesiana")
+
+cat(sprintf("RMSE : %.4f\nMAE  : %.4f\nR²   : %.4f\n",
+            m_bayes$RMSE, m_bayes$MAE, m_bayes$R2))
+
+# Intervalos de credibilidad al 90% para los coeficientes
+ci_bayes <- posterior_interval(modelo_bayes, prob = 0.90)
+ci_df    <- as_tibble(ci_bayes, rownames = "Parámetro") %>%
+  rename(`IC 5%` = `5%`, `IC 95%` = `95%`)
+
+kable(ci_df, digits = 4,
+      caption = "Bayesiana — Intervalos de credibilidad al 90%")
+```
+
+---
+
+# 6. Visualización: Valores Reales vs. Predichos
+
+```{r visualizacion, fig.width=14, fig.height=9, fig.align='center'}
+# Ordenar facets por RMSE ascendente (mejor modelo primero)
+orden_modelos <- metricas %>% arrange(RMSE) %>% pull(Modelo)
+
+df_plot <- bind_rows(
+  tibble(Modelo = "OLS",                  Real = y_test, Predicho = pred_ols),
+  tibble(Modelo = "LAD (Cuántica τ=0.5)", Real = y_test, Predicho = pred_lad),
+  tibble(Modelo = "M-Robusto (Huber)",    Real = y_test, Predicho = pred_m),
+  tibble(Modelo = "GAM",                  Real = y_test, Predicho = pred_gam),
+  tibble(Modelo = "Ridge",                Real = y_test, Predicho = pred_ridge),
+  tibble(Modelo = "Bayesiana",            Real = y_test, Predicho = pred_bayes)
+) %>%
+  left_join(metricas, by = "Modelo") %>%
+  mutate(
+    label_rmse = sprintf("RMSE=%.3f | R²=%.3f", RMSE, R2),
+    Modelo     = factor(Modelo, levels = orden_modelos)
+  )
+
+# Etiquetas RMSE/R² por panel
+df_labels <- df_plot %>%
+  distinct(Modelo, label_rmse) %>%
+  mutate(
+    x_pos = min(df_plot$Real) + diff(range(df_plot$Real)) * 0.05,
+    y_pos = max(df_plot$Real) - diff(range(df_plot$Real)) * 0.05
+  )
+
+# Subsamplear para renderizado (6 modelos × ~220 K obs. test = 1.3 M puntos)
+set.seed(42)
+df_vis <- df_plot %>%
+  group_by(Modelo) %>%
+  slice_sample(n = 5000L) %>%
+  ungroup()
+
+p_comparacion <- ggplot(df_vis, aes(x = Real, y = Predicho)) +
+  geom_point(alpha = 0.10, size = 0.55, color = "#2C7BB6") +
+  geom_abline(
+    slope     = 1, intercept = 0,
+    color     = "#D7191C", linewidth = 0.85, linetype = "dashed"
+  ) +
+  geom_smooth(
+    method = "lm", formula = y ~ x, se = FALSE,
+    color  = "#1A9641", linewidth = 0.70
+  ) +
+  geom_text(
+    data  = df_labels,
+    aes(x = x_pos, y = y_pos, label = label_rmse),
+    hjust = 0, vjust = 1, size = 2.9, color = "gray30", fontface = "italic",
+    inherit.aes = FALSE
+  ) +
+  facet_wrap(~ Modelo, ncol = 3, scales = "fixed") +
+  scale_x_continuous(expand = expansion(mult = 0.04)) +
+  scale_y_continuous(expand = expansion(mult = 0.04)) +
+  labs(
+    title    = "Valores Reales vs. Predichos — Comparación de 6 Modelos de Regresión",
+    subtitle = paste(
+      "Línea roja punteada: ajuste perfecto (45°)",
+      " | Línea verde: tendencia observada",
+      " | Paneles ordenados por RMSE ↑ (mejor → peor)"
+    ),
+    x       = "FloodProbability Real",
+    y       = "FloodProbability Predicha",
+    caption = "Dataset: flood/train.csv  |  Variable objetivo: FloodProbability"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 13),
+    plot.subtitle    = element_text(size = 9, color = "gray45"),
+    plot.caption     = element_text(size = 8, color = "gray55"),
+    strip.text       = element_text(face = "bold", size = 10),
+    strip.background = element_rect(fill = "gray93", color = NA),
+    panel.grid.minor = element_blank(),
+    panel.border     = element_rect(color = "gray85", fill = NA, linewidth = 0.4)
+  )
+
+print(p_comparacion)
+
+ggsave(
+  filename = "comparacion_modelos_flood.png",
+  plot     = p_comparacion,
+  width    = 14, height = 9, dpi = 150
+)
+```
+
+---
+
+# 7. Tabla Comparativa Final
+
+```{r tabla-final}
+tabla_final <- metricas %>%
+  arrange(RMSE) %>%
+  mutate(
+    `#`  = row_number(),
+    RMSE = round(RMSE, 4),
+    MAE  = round(MAE,  4),
+    R2   = round(R2,   4)
+  ) %>%
+  dplyr::select(`#`, Modelo, RMSE, MAE, R2)
+
+kable(
+  tabla_final,
+  align     = c("r", "l", "r", "r", "r"),
+  col.names = c("#", "Modelo", "RMSE ↓", "MAE", "R²"),
+  caption   = "Métricas en conjunto de prueba (20%) — ordenadas por RMSE ascendente"
+)
+```
+
+```{r mejor-modelo}
+cat(sprintf(
+  "Mejor modelo predictivo (menor RMSE): %s\nRMSE = %.4f  |  MAE = %.4f  |  R² = %.4f\n",
+  tabla_final$Modelo[1],
+  tabla_final$RMSE[1],
+  tabla_final$MAE[1],
+  tabla_final$R2[1]
+))
+```
